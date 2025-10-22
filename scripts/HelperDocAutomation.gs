@@ -337,9 +337,13 @@ function showUploadDialog() {
  */
 function processPDFUpload(base64Data, fileName) {
   try {
+    Logger.log(`Processing PDF upload: ${fileName}`);
+    Logger.log(`PDF size: ${base64Data.length} bytes (base64)`);
+    
     // Convert base64 to blob
     const data = Utilities.base64Decode(base64Data);
     const blob = Utilities.newBlob(data, 'application/pdf', fileName);
+    Logger.log(`Blob created: ${blob.getBytes().length} bytes`);
     
     // Call Vercel API
     const parsedOrders = callVercelAPI(blob);
@@ -393,6 +397,11 @@ function callVercelAPI(blob) {
     
     if (!responseData.success) {
       throw new Error(responseData.error || 'API request failed');
+    }
+    
+    Logger.log(`Found ${responseData.orders.length} orders in PDF`);
+    if (responseData.orders.length > 0) {
+      Logger.log(`First order: ${responseData.orders[0].orderNumber}, ${responseData.orders[0].cards.length} cards`);
     }
     
     return responseData.orders;
