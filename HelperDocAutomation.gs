@@ -86,20 +86,39 @@ function pullUnclaimedItems() {
     // Get Discrepancy Log
     const discrepLog = SpreadsheetApp.openById(CONFIG.DISCREP_LOG_ID);
     const discrepSheet = discrepLog.getSheetByName('SQ Discrepancy Log');
+    
+    if (!discrepSheet) {
+      Logger.log('ERROR: Could not find sheet "SQ Discrepancy Log"');
+      ui.alert('Error', 'Could not find sheet "SQ Discrepancy Log" in Discrepancy Log spreadsheet.', ui.ButtonSet.OK);
+      return;
+    }
+    
     const dataRange = discrepSheet.getDataRange();
     const data = dataRange.getValues();
     
+    Logger.log(`Total rows in sheet: ${data.length}`);
+    Logger.log(`Checking columns - Initials: ${CONFIG.DISCREP_COLS.INITIALS}, ResType: ${CONFIG.DISCREP_COLS.RESOLUTION_TYPE}, SolveDate: ${CONFIG.DISCREP_COLS.SOLVE_DATE}`);
+    
     // Find unclaimed items (no initials AND Missing Note)
     const unclaimedItems = [];
+    let debugCount = 0;
     
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       const initials = row[CONFIG.DISCREP_COLS.INITIALS];
       const resolutionType = row[CONFIG.DISCREP_COLS.RESOLUTION_TYPE];
       const solveDate = row[CONFIG.DISCREP_COLS.SOLVE_DATE];
+      const sqNumber = row[CONFIG.DISCREP_COLS.SQ_NUMBER];
+      
+      // Log first 5 rows for debugging
+      if (debugCount < 5) {
+        Logger.log(`Row ${i}: SQ=${sqNumber}, Initials='${initials}', ResType='${resolutionType}', SolveDate='${solveDate}'`);
+        debugCount++;
+      }
       
       // If no initials, resolution type is "Missing Note", and no solve date
       if (!initials && resolutionType && resolutionType.toString().includes('Missing Note') && !solveDate) {
+        Logger.log(`✓ Found unclaimed item at row ${i}: ${sqNumber}`);
         unclaimedItems.push({
           sqNumber: row[CONFIG.DISCREP_COLS.SQ_NUMBER],
           cardName: row[CONFIG.DISCREP_COLS.CARD_NAME],
@@ -112,8 +131,11 @@ function pullUnclaimedItems() {
       }
     }
     
+    Logger.log(`Total unclaimed items found: ${unclaimedItems.length}`);
+    
     if (unclaimedItems.length === 0) {
-      ui.alert('No Unclaimed Items', 'No unclaimed "Missing Note" items found in Discrepancy Log.', ui.ButtonSet.OK);
+      Logger.log('No items matched criteria. Check logs above for details.');
+      ui.alert('No Unclaimed Items', 'No unclaimed "Missing Note" items found in Discrepancy Log.\n\nCheck View > Logs for details.', ui.ButtonSet.OK);
       return;
     }
     
