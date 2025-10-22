@@ -221,8 +221,8 @@ class handler(BaseHTTPRequestHandler):
         pattern_bin_no_num = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s+(\w+)\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_bin_no_num, order_text, re.MULTILINE):
-            # Skip if it already has a collector number (would be caught by pattern 1)
-            if re.match(r'#\d+', match.group(3)):
+            # Skip if card name contains collector number (would be caught by pattern 1)
+            if ' - #' in match.group(2):
                 continue
                 
             condition = match.group(4).strip()
