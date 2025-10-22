@@ -10,7 +10,7 @@
 
 // Configuration
 const CONFIG = {
-  VERCEL_API_URL: 'https://pdf-six-flax.vercel.app/api/parse',
+  VERCEL_API_URL: 'https://pdf-nine-psi.vercel.app/api/parse',
   
   // Discrepancy Log
   DISCREP_LOG_ID: '1Jyf236hcpsm-x5TONHQ5tbxtFM9gfjg-BAGYwk4BNtI',
