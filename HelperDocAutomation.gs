@@ -18,17 +18,18 @@ const CONFIG = {
   // Refund Log
   REFUND_LOG_ID: '1uMF_4fluOcnnDsUPLFpM-oWfIpd1HD6Ij4d8UNlgaFc',
   
-  // Discrepancy Log Columns (adjust based on your actual sheet)
+  // Discrepancy Log Columns (based on actual sheet layout)
   DISCREP_COLS: {
-    INITIALS: 1,       // Column B (where initials are)
     SQ_NUMBER: 2,      // Column C
-    CARD_NAME: 3,      // Column D
-    COLLECTOR_NUM: 4,  // Column E
-    RARITY: 5,         // Column F
-    SET_NAME: 6,       // Column G
-    CONDITION: 7,      // Column H
-    QTY: 8,            // Column I
-    RESOLUTION: 11     // Column L (Missing Note)
+    CARD_NAME: 4,      // Column E
+    COLLECTOR_NUM: 5,  // Column F (Number)
+    RARITY: 6,         // Column G
+    SET_NAME: 7,       // Column H (Set)
+    CONDITION: 8,      // Column I
+    QTY: 9,            // Column J
+    INITIALS: 14,      // Column O (Inv. Initials - for claiming)
+    RESOLUTION_TYPE: 13, // Column N (Resolution Type - "Missing Note")
+    SOLVE_DATE: 15     // Column P (Solve Date)
   },
   
   // Helper Doc Columns (this sheet - matches "Paste Here" tab)
@@ -94,10 +95,11 @@ function pullUnclaimedItems() {
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       const initials = row[CONFIG.DISCREP_COLS.INITIALS];
-      const resolution = row[CONFIG.DISCREP_COLS.RESOLUTION];
+      const resolutionType = row[CONFIG.DISCREP_COLS.RESOLUTION_TYPE];
+      const solveDate = row[CONFIG.DISCREP_COLS.SOLVE_DATE];
       
-      // If no initials and is "Missing Note"
-      if (!initials && resolution && resolution.toString().includes('Missing Note')) {
+      // If no initials, resolution type is "Missing Note", and no solve date
+      if (!initials && resolutionType && resolutionType.toString().includes('Missing Note') && !solveDate) {
         unclaimedItems.push({
           sqNumber: row[CONFIG.DISCREP_COLS.SQ_NUMBER],
           cardName: row[CONFIG.DISCREP_COLS.CARD_NAME],
