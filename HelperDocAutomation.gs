@@ -29,7 +29,8 @@ const CONFIG = {
     QTY: 9,            // Column J
     INITIALS: 14,      // Column O (Inv. Initials - for claiming)
     RESOLUTION_TYPE: 15, // Column P (Resolution Type - "Missing Note")
-    SOLVE_DATE: 17     // Column R (Solve Date)
+    SOLVE_DATE: 17,    // Column R (Solve Date)
+    MANUAL_INTERVENTION: 18 // Column S (if has value, skip - needs manual intervention)
   },
   
   // Helper Doc Columns (this sheet - matches "Paste Here" tab)
@@ -99,9 +100,11 @@ function pullUnclaimedItems() {
     
     Logger.log('Getting values...');
     const data = dataRange.getValues();
+    Logger.log('Getting background colors...');
+    const backgrounds = dataRange.getBackgrounds();
     Logger.log(`Total rows in sheet: ${data.length}`);
     Logger.log(`Total columns: ${data[0] ? data[0].length : 0}`);
-    Logger.log(`Checking columns - Initials: ${CONFIG.DISCREP_COLS.INITIALS}, ResType: ${CONFIG.DISCREP_COLS.RESOLUTION_TYPE}, SolveDate: ${CONFIG.DISCREP_COLS.SOLVE_DATE}`);
+    Logger.log(`Checking columns - Initials: ${CONFIG.DISCREP_COLS.INITIALS}, ResType: ${CONFIG.DISCREP_COLS.RESOLUTION_TYPE}, SolveDate: ${CONFIG.DISCREP_COLS.SOLVE_DATE}, Manual: ${CONFIG.DISCREP_COLS.MANUAL_INTERVENTION}`);
     
     // Find unclaimed items (no initials AND Missing Note)
     const unclaimedItems = [];
@@ -114,16 +117,28 @@ function pullUnclaimedItems() {
       const initials = row[CONFIG.DISCREP_COLS.INITIALS];
       const resolutionType = row[CONFIG.DISCREP_COLS.RESOLUTION_TYPE];
       const solveDate = row[CONFIG.DISCREP_COLS.SOLVE_DATE];
+      const manualIntervention = row[CONFIG.DISCREP_COLS.MANUAL_INTERVENTION];
       const sqNumber = row[CONFIG.DISCREP_COLS.SQ_NUMBER];
+      const sqBackgroundColor = backgrounds[i][CONFIG.DISCREP_COLS.SQ_NUMBER];
       
       // Log first 5 rows for debugging
       if (debugCount < 5) {
-        Logger.log(`Row ${i}: SQ=${sqNumber}, Initials='${initials}', ResType='${resolutionType}', SolveDate='${solveDate}'`);
+        Logger.log(`Row ${i}: SQ=${sqNumber}, Initials='${initials}', ResType='${resolutionType}', SolveDate='${solveDate}', Manual='${manualIntervention}', BgColor='${sqBackgroundColor}'`);
         debugCount++;
       }
       
-      // If no initials, resolution type is "Missing Note", and no solve date
-      if (!initials && resolutionType && resolutionType.toString().includes('Missing Note') && !solveDate) {
+      // Check if SQ Number has red background (skip if red)
+      const isRedBackground = sqBackgroundColor && (
+        sqBackgroundColor.toLowerCase().includes('#ff') || 
+        sqBackgroundColor.toLowerCase().includes('red')
+      );
+      
+      // If no initials, resolution type is "Missing Note", no solve date, no manual intervention, and not red background
+      if (!initials && 
+          resolutionType && resolutionType.toString().includes('Missing Note') && 
+          !solveDate && 
+          !manualIntervention &&
+          !isRedBackground) {
         Logger.log(`✓ Found unclaimed item at row ${i}: ${sqNumber}`);
         unclaimedItems.push({
           sqNumber: row[CONFIG.DISCREP_COLS.SQ_NUMBER],
