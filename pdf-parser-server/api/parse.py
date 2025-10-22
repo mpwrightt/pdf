@@ -251,6 +251,7 @@ class handler(BaseHTTPRequestHandler):
                 })
         
         # Pattern 4: Extreme split case (card name on one line, Bin+qty on next)
+        # Handles cases where condition might be split across 3 lines
         pattern_split = r'([A-Z][\w\s,\(\)]+?)\s+-\s+#(\d+)\s+-\s+(\w+)\s+-\s+([A-Za-z\s]+)$'
         
         for match in re.finditer(pattern_split, order_text, re.MULTILINE):
@@ -261,15 +262,32 @@ class handler(BaseHTTPRequestHandler):
                 next_line_end = len(order_text)
             next_line = order_text[next_line_start:next_line_end].strip()
             
+            # Check if next line has Bin info
             bin_match = re.match(r'Bin\s+[\w\-]+\s+(\d+)\s+Magic\s+-\s+(.+)', next_line)
             if bin_match:
-                card_key = f"{match.group(1)}|{match.group(2)}"
+                # Condition from first line
+                condition_part1 = match.group(4).strip()
+                
+                # Check if there's a third line with rest of condition
+                third_line_start = next_line_end + 1
+                third_line_end = order_text.find('\n', third_line_start)
+                if third_line_end == -1:
+                    third_line_end = len(order_text)
+                third_line = order_text[third_line_start:third_line_end].strip()
+                
+                # If third line is a single word (like "Played"), append it to condition
+                if third_line and not third_line.startswith('Bin') and not re.match(r'^\d+', third_line) and len(third_line.split()) <= 2:
+                    full_condition = f"{condition_part1} {third_line}"
+                else:
+                    full_condition = condition_part1
+                
+                card_key = f"{match.group(1)}|{match.group(2)}|{full_condition}"
                 if card_key not in seen_cards:
                     seen_cards.add(card_key)
                     cards.append({
                         'name': match.group(1).strip(),
                         'quantity': int(bin_match.group(1)),
-                        'condition': match.group(4).strip(),
+                        'condition': full_condition,
                         'setName': bin_match.group(2).strip(),
                         'collectorNumber': match.group(2).strip(),
                         'rarity': match.group(3).strip()
