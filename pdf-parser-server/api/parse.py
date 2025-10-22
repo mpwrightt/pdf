@@ -203,7 +203,8 @@ class handler(BaseHTTPRequestHandler):
                 })
         
         # Pattern 2: Standard format (no Bin prefix)
-        pattern_standard = r'(?<!Bin\s)(?<!\d\s)(\d+)\s+(.+?)\s+-\s+#(\d+)\s+-\s+(\w+)\s+-\s+(.+?)\s+Magic\s+-\s+(.+?)$'
+        # Matches: "1 CardName - #123 - R - Condition Magic - Set"
+        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s+#(\d+)\s+-\s+(\w+)\s+-\s+(.+?)\s+Magic\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_standard, order_text, re.MULTILINE):
             condition = match.group(5).strip()
