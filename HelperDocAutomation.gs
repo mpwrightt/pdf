@@ -136,9 +136,14 @@ function pullUnclaimedItems() {
       }
       
       // Check if SQ Number has red background (skip if red)
-      const isRedBackground = sqBackgroundColor && (
-        sqBackgroundColor.toLowerCase().includes('#ff') || 
-        sqBackgroundColor.toLowerCase().includes('red')
+      // Red in Sheets is typically #ff0000, #ff0001, etc.
+      const colorLower = sqBackgroundColor ? sqBackgroundColor.toLowerCase() : '';
+      const isRedBackground = colorLower && (
+        colorLower.startsWith('#ff0000') ||
+        colorLower.startsWith('#ff0001') ||
+        colorLower === '#f00' ||
+        colorLower.includes('rgb(255, 0, 0') ||
+        colorLower === 'red'
       );
       
       // Track why items are skipped
@@ -152,6 +157,9 @@ function pullUnclaimedItems() {
         skipCounts.hasManual++;
       } else if (isRedBackground) {
         skipCounts.isRed++;
+        if (skipCounts.isRed === 1) {
+          Logger.log(`First red background found at row ${i}: color='${sqBackgroundColor}'`);
+        }
       } else {
         // All criteria met!
         Logger.log(`✓ Found unclaimed item at row ${i}: ${sqNumber}`);
