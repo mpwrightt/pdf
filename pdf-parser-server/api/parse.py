@@ -189,7 +189,7 @@ class handler(BaseHTTPRequestHandler):
                     else:
                         set_name = next_line
             
-            card_key = f"{match.group(2)}|{match.group(3)}"
+            card_key = f"{match.group(2)}|{match.group(3)}|{condition}"
             if card_key not in seen_cards:
                 seen_cards.add(card_key)
                 cards.append({
@@ -205,13 +205,14 @@ class handler(BaseHTTPRequestHandler):
         pattern_standard = r'(?<!Bin\s)(?<!\d\s)(\d+)\s+(.+?)\s+-\s+#(\d+)\s+-\s+(\w+)\s+-\s+(.+?)\s+Magic\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_standard, order_text, re.MULTILINE):
-            card_key = f"{match.group(2)}|{match.group(3)}"
+            condition = match.group(5).strip()
+            card_key = f"{match.group(2)}|{match.group(3)}|{condition}"
             if card_key not in seen_cards:
                 seen_cards.add(card_key)
                 cards.append({
                     'name': match.group(2).strip(),
                     'quantity': int(match.group(1)),
-                    'condition': match.group(5).strip(),
+                    'condition': condition,
                     'setName': match.group(6).strip(),
                     'collectorNumber': match.group(3).strip(),
                     'rarity': match.group(4).strip()
@@ -234,8 +235,8 @@ class handler(BaseHTTPRequestHandler):
                 condition = parts[0].strip()
                 set_name = parts[1].strip() if len(parts) > 1 else ""
             
-            # Use card name + set as key since no collector number
-            card_key = f"{match.group(2)}|{set_name}"
+            # Use card name + set + condition as key since no collector number
+            card_key = f"{match.group(2)}|{set_name}|{condition}"
             if card_key not in seen_cards:
                 seen_cards.add(card_key)
                 cards.append({
