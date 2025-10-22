@@ -27,9 +27,9 @@ const CONFIG = {
     SET_NAME: 7,       // Column H (Set)
     CONDITION: 8,      // Column I
     QTY: 9,            // Column J
-    INITIALS: 12,      // Column M (Inv. Initials - for claiming)
-    RESOLUTION_TYPE: 13, // Column N (Resolution Type - "Missing Note")
-    SOLVE_DATE: 15     // Column P (Solve Date)
+    INITIALS: 14,      // Column O (Inv. Initials - for claiming)
+    RESOLUTION_TYPE: 15, // Column P (Resolution Type - "Missing Note")
+    SOLVE_DATE: 17     // Column R (Solve Date)
   },
   
   // Helper Doc Columns (this sheet - matches "Paste Here" tab)
