@@ -411,8 +411,14 @@ function fillOrderInfo(parsedOrders) {
   const dataRange = sheet.getDataRange();
   const data = dataRange.getValues();
   
-  // Start from row 2 (skip header)
-  for (let i = 1; i < data.length; i++) {
+  Logger.log(`fillOrderInfo: Processing ${parsedOrders.length} parsed orders`);
+  Logger.log(`Total data rows: ${data.length}`);
+  
+  let matchCount = 0;
+  let noMatchCount = 0;
+  
+  // Start from row 3 (rows 1-2 are headers, data starts at row 3)
+  for (let i = 2; i < data.length; i++) {
     const row = data[i];
     const cardName = row[CONFIG.HELPER_COLS.CARD_NAME];
     const setName = row[CONFIG.HELPER_COLS.SET_NAME];
@@ -420,17 +426,24 @@ function fillOrderInfo(parsedOrders) {
     
     if (!cardName) continue; // Skip empty rows
     
+    Logger.log(`Row ${i + 1}: Looking for match - ${cardName} | ${setName} | ${condition}`);
+    
     // Find matching order
     const matchedOrder = findMatchingOrder(cardName, setName, condition, parsedOrders);
     
     if (matchedOrder) {
-      // Fill in Order Number and Buyer Name
+      // Fill in Order Number and Buyer Name (columns H and I, indices 7 and 8)
       sheet.getRange(i + 1, CONFIG.HELPER_COLS.ORDER_NUMBER + 1).setValue(matchedOrder.orderNumber);
       sheet.getRange(i + 1, CONFIG.HELPER_COLS.BUYER_NAME + 1).setValue(matchedOrder.buyerName);
+      Logger.log(`  ✓ Matched! Order: ${matchedOrder.orderNumber}, Buyer: ${matchedOrder.buyerName}`);
+      matchCount++;
     } else {
-      Logger.log(`No match found for: ${cardName} (${setName})`);
+      Logger.log(`  ✗ No match found for: ${cardName} (${setName})`);
+      noMatchCount++;
     }
   }
+  
+  Logger.log(`\nMatching complete: ${matchCount} matched, ${noMatchCount} not matched`);
 }
 
 /**
@@ -471,10 +484,10 @@ function sendToRefundLog() {
     const dataRange = sheet.getDataRange();
     const data = dataRange.getValues();
     
-    // Collect rows with Order Number filled in
+    // Collect rows with Order Number filled in (data starts at row 3)
     const completedItems = [];
     
-    for (let i = 1; i < data.length; i++) {
+    for (let i = 2; i < data.length; i++) {
       const row = data[i];
       const orderNumber = row[CONFIG.HELPER_COLS.ORDER_NUMBER];
       const buyerName = row[CONFIG.HELPER_COLS.BUYER_NAME];
@@ -567,8 +580,8 @@ function clearHelperSheet() {
   if (response === ui.Button.YES) {
     const sheet = SpreadsheetApp.getActiveSheet();
     const lastRow = sheet.getLastRow();
-    if (lastRow > 1) {
-      sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+    if (lastRow > 2) {
+      sheet.getRange(3, 1, lastRow - 2, sheet.getLastColumn()).clearContent();
     }
     ui.alert('Cleared', 'Helper sheet cleared.', ui.ButtonSet.OK);
   }
