@@ -93,15 +93,21 @@ function pullUnclaimedItems() {
       return;
     }
     
+    Logger.log('Getting data range...');
     const dataRange = discrepSheet.getDataRange();
-    const data = dataRange.getValues();
+    Logger.log(`Data range: ${dataRange.getA1Notation()}`);
     
+    Logger.log('Getting values...');
+    const data = dataRange.getValues();
     Logger.log(`Total rows in sheet: ${data.length}`);
+    Logger.log(`Total columns: ${data[0] ? data[0].length : 0}`);
     Logger.log(`Checking columns - Initials: ${CONFIG.DISCREP_COLS.INITIALS}, ResType: ${CONFIG.DISCREP_COLS.RESOLUTION_TYPE}, SolveDate: ${CONFIG.DISCREP_COLS.SOLVE_DATE}`);
     
     // Find unclaimed items (no initials AND Missing Note)
     const unclaimedItems = [];
     let debugCount = 0;
+    
+    Logger.log(`Starting to scan ${data.length - 1} data rows...`);
     
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
