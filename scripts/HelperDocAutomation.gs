@@ -475,14 +475,24 @@ function normalizeCondition(condition) {
  * Find matching order for a card
  */
 function findMatchingOrder(cardName, setName, condition, orders) {
-  // Normalize by removing newlines and extra spaces
-  const normalizedCardName = cardName.replace(/\s*\n\s*/g, ' ').toLowerCase().trim();
+  // Normalize by removing newlines, extra spaces, and spaces around punctuation
+  const normalizedCardName = cardName
+    .replace(/\s*\n\s*/g, ' ')  // Replace newlines with space
+    .replace(/\s+/g, ' ')        // Collapse multiple spaces to one
+    .replace(/\s*,\s*/g, ',')    // Remove spaces around commas
+    .toLowerCase()
+    .trim();
   const normalizedSetName = setName.toLowerCase().trim();
   const normalizedCondition = normalizeCondition(condition);
   
   for (const order of orders) {
     for (const card of order.cards) {
-      const cardNameNormalized = card.name.replace(/\s*\n\s*/g, ' ').toLowerCase().trim();
+      const cardNameNormalized = card.name
+        .replace(/\s*\n\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/\s*,\s*/g, ',')
+        .toLowerCase()
+        .trim();
       const matchesName = cardNameNormalized === normalizedCardName;
       const matchesSet = card.setName.toLowerCase().includes(normalizedSetName) || 
                          normalizedSetName.includes(card.setName.toLowerCase());
