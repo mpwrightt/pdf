@@ -196,7 +196,7 @@ function pullUnclaimedItems() {
       return;
     }
     
-    // Ask user which SQ to work on
+    // Auto-select first unclaimed SQ
     const uniqueSQs = [...new Set(unclaimedItems.map(item => item.sqNumber))];
     
     if (uniqueSQs.length === 0) {
@@ -204,19 +204,9 @@ function pullUnclaimedItems() {
       return;
     }
     
-    // Show first few SQs
-    const sqList = uniqueSQs.slice(0, 10).join(', ');
-    const response = ui.prompt(
-      'Select SQ Number',
-      `Found ${uniqueSQs.length} unclaimed SQs:\n${sqList}${uniqueSQs.length > 10 ? '...' : ''}\n\nEnter SQ number to pull:`,
-      ui.ButtonSet.OK_CANCEL
-    );
-    
-    if (response.getSelectedButton() !== ui.Button.OK) {
-      return;
-    }
-    
-    const selectedSQ = response.getResponseText().trim();
+    // Automatically select the first SQ
+    const selectedSQ = uniqueSQs[0];
+    Logger.log(`Auto-selected first unclaimed SQ: ${selectedSQ} (${uniqueSQs.length} total unclaimed SQs)`);
     
     // Filter items for selected SQ
     const itemsForSQ = unclaimedItems.filter(item => item.sqNumber === selectedSQ);
@@ -261,7 +251,7 @@ function pullUnclaimedItems() {
     
     ui.alert(
       'Items Loaded',
-      `Pulled ${itemsForSQ.length} items for SQ: ${selectedSQ}\n\nNext: Upload the PDF for this SQ.`,
+      `Pulled ${itemsForSQ.length} items for SQ: ${selectedSQ}\n\n${uniqueSQs.length} total unclaimed SQs remaining.\n\nNext: Upload the PDF for this SQ.`,
       ui.ButtonSet.OK
     );
     
