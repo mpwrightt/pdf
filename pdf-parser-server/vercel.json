@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/parse.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/parse",
+      "dest": "api/parse.py"
+    }
+  ],
+  "functions": {
+    "api/parse.py": {
+      "maxDuration": 30
+    }
+  }
+}

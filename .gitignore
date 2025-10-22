@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Test files
+*.pdf
+*.csv
+*.doc
+
+# Local test data
+test_results*.json
+
+# Environment
+.env
+*.log

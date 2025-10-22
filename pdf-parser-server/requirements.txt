@@ -1,0 +1,4 @@
+pdfplumber==0.11.0
+Pillow==10.3.0
+pdfminer.six==20231228
+cryptography==42.0.5
