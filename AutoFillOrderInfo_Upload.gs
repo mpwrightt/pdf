@@ -218,9 +218,47 @@ function processPDFUpload(base64Data, fileName) {
 }
 
 /**
- * Extract text from PDF using Google Drive
+ * Extract text from PDF using Vercel API
  */
 function extractTextFromPDF(blob) {
+  try {
+    // Call Vercel PDF Parser API
+    const VERCEL_API_URL = 'https://pdf-six-flax.vercel.app/api/parse';
+    
+    // Convert blob to base64
+    const base64PDF = Utilities.base64Encode(blob.getBytes());
+    
+    // Call API
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ pdf: base64PDF }),
+      muteHttpExceptions: true
+    };
+    
+    const response = UrlFetchApp.fetch(VERCEL_API_URL, options);
+    const responseData = JSON.parse(response.getContentText());
+    
+    if (!responseData.success) {
+      throw new Error(responseData.error || 'API request failed');
+    }
+    
+    // Store parsed orders for later use
+    PropertiesService.getScriptProperties().setProperty('PARSED_ORDERS', JSON.stringify(responseData.orders));
+    
+    // Return a text representation for compatibility
+    return JSON.stringify(responseData.orders);
+    
+  } catch (error) {
+    Logger.log('Error calling Vercel API: ' + error.toString());
+    throw new Error('Failed to parse PDF via API: ' + error.message);
+  }
+}
+
+/**
+ * OLD FUNCTION - Extract text from PDF using Google Drive (DEPRECATED)
+ */
+function extractTextFromPDF_OLD(blob) {
   try {
     // Save PDF to Drive temporarily
     const folder = DriveApp.getRootFolder();
