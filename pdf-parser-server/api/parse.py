@@ -217,7 +217,37 @@ class handler(BaseHTTPRequestHandler):
                     'rarity': match.group(4).strip()
                 })
         
-        # Pattern 3: Extreme split case (card name on one line, Bin+qty on next)
+        # Pattern 3: Bin format WITHOUT collector number (e.g. "Bin 7 2 Raging Goblin - C - Lightly Played Magic - Portal")
+        pattern_bin_no_num = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s+(\w+)\s+-\s+(.+?)$'
+        
+        for match in re.finditer(pattern_bin_no_num, order_text, re.MULTILINE):
+            # Skip if it already has a collector number (would be caught by pattern 1)
+            if re.match(r'#\d+', match.group(3)):
+                continue
+                
+            condition = match.group(4).strip()
+            set_name = ""
+            
+            # Check if condition has "Magic -" already
+            if "Magic -" in condition:
+                parts = condition.split("Magic -", 1)
+                condition = parts[0].strip()
+                set_name = parts[1].strip() if len(parts) > 1 else ""
+            
+            # Use card name + set as key since no collector number
+            card_key = f"{match.group(2)}|{set_name}"
+            if card_key not in seen_cards:
+                seen_cards.add(card_key)
+                cards.append({
+                    'name': match.group(2).strip(),
+                    'quantity': int(match.group(1)),
+                    'condition': condition,
+                    'setName': set_name,
+                    'collectorNumber': '',  # No collector number
+                    'rarity': match.group(3).strip()
+                })
+        
+        # Pattern 4: Extreme split case (card name on one line, Bin+qty on next)
         pattern_split = r'([A-Z][\w\s,\(\)]+?)\s+-\s+#(\d+)\s+-\s+(\w+)\s+-\s+([A-Za-z\s]+)$'
         
         for match in re.finditer(pattern_split, order_text, re.MULTILINE):
