@@ -27,6 +27,7 @@ const CONFIG = {
     SET_NAME: 7,       // Column H (Set)
     CONDITION: 8,      // Column I
     QTY: 9,            // Column J
+    LOCATION_ID: 10,   // Column K (LocationID - skip if "NONE")
     INITIALS: 14,      // Column O (Inv. Initials - for claiming)
     RESOLUTION_TYPE: 15, // Column P (Resolution Type - "Missing Note")
     SOLVE_DATE: 17,    // Column R (Solve Date)
@@ -117,7 +118,8 @@ function pullUnclaimedItems() {
       hasInitials: 0,
       hasSolveDate: 0,
       hasManual: 0,
-      isRed: 0
+      isRed: 0,
+      hasNoneLocation: 0
     };
     
     for (let i = 1; i < data.length; i++) {
@@ -126,6 +128,7 @@ function pullUnclaimedItems() {
       const resolutionType = row[CONFIG.DISCREP_COLS.RESOLUTION_TYPE];
       const solveDate = row[CONFIG.DISCREP_COLS.SOLVE_DATE];
       const manualIntervention = row[CONFIG.DISCREP_COLS.MANUAL_INTERVENTION];
+      const locationId = row[CONFIG.DISCREP_COLS.LOCATION_ID];
       const sqNumber = row[CONFIG.DISCREP_COLS.SQ_NUMBER];
       const sqBackgroundColor = backgrounds[i][CONFIG.DISCREP_COLS.SQ_NUMBER];
       
@@ -147,7 +150,7 @@ function pullUnclaimedItems() {
       );
       
       // Track why items are skipped
-      // New simple logic: no initials, no solve date, not red, not in vault
+      // Filter logic: no initials, no solve date, not red, not in vault, not "NONE" location
       if (initials) {
         skipCounts.hasInitials++;
       } else if (solveDate) {
@@ -159,6 +162,8 @@ function pullUnclaimedItems() {
         }
       } else if (manualIntervention) {
         skipCounts.hasManual++;
+      } else if (locationId && locationId.toString().toUpperCase() === 'NONE') {
+        skipCounts.hasNoneLocation++;
       } else {
         // All criteria met!
         Logger.log(`✓ Found unclaimed item at row ${i}: ${sqNumber}`);
@@ -180,6 +185,7 @@ function pullUnclaimedItems() {
     Logger.log(`  - Has solve date (already solved): ${skipCounts.hasSolveDate}`);
     Logger.log(`  - Red background (needs attention): ${skipCounts.isRed}`);
     Logger.log(`  - Has manual intervention flag (in vault): ${skipCounts.hasManual}`);
+    Logger.log(`  - Location is "NONE": ${skipCounts.hasNoneLocation}`);
     
     if (unclaimedItems.length === 0) {
       Logger.log('\nNo items matched ALL criteria. Check skip breakdown above.');
@@ -189,7 +195,8 @@ function pullUnclaimedItems() {
         `- Has initials: ${skipCounts.hasInitials}\n` +
         `- Has solve date: ${skipCounts.hasSolveDate}\n` +
         `- Red background: ${skipCounts.isRed}\n` +
-        `- In vault: ${skipCounts.hasManual}\n\n` +
+        `- In vault: ${skipCounts.hasManual}\n` +
+        `- Location "NONE": ${skipCounts.hasNoneLocation}\n\n` +
         `Check Extensions > Apps Script > Executions for details.`,
         ui.ButtonSet.OK
       );
