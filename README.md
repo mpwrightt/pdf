@@ -1,75 +1,94 @@
 # TCGplayer Discrepancy Refund Automation
 
-Automation system for processing refunds for confirmed missing cards in the TCGplayer Direct inventory workflow.
+Automated workflow for processing refunds for missing cards in TCGplayer Direct inventory.
 
 ## Overview
 
-This project automates the refund processing workflow that currently requires manual data entry, PDF searching, and order matching. The system connects the Discrepancy Log directly to the Refund Log via a TCGplayer internal API and Google Apps Script bot.
+This system automates the refund processing workflow by:
+
+1. Pulling unclaimed items from the Discrepancy Log
+2. Parsing SQ detail PDFs to extract order information
+3. Matching cards to orders
+4. Sending completed refund data to the Refund Log
+
+## Project Structure
+
+```text
+/
+├── scripts/              # Google Apps Script files
+│   ├── HelperDocAutomation.gs      # Main automation workflow
+│   ├── AutoFillOrderInfo_Upload.gs  # PDF upload handler
+│   └── DiscrepancyRefundAutomation.gs # Legacy script
+├── pdf-parser-server/    # Vercel serverless PDF parser
+│   ├── api/parse.py      # Python PDF parsing endpoint
+│   ├── vercel.json       # Deployment configuration
+│   └── requirements.txt  # Python dependencies
+├── docs/                 # Documentation
+│   ├── AUTOMATION_PLAN.md   # Original API requirements
+│   ├── MATCHING_LOGIC.md    # Card matching algorithm
+│   └── AGENTS.MD            # Manual process documentation
+├── tests/                # Test files
+│   └── test_matching.js  # Matching logic tests
+├── data/                 # Local test data (gitignored)
+└── README.md             # This file
+```
 
 ## Components
 
-### 1. Google Apps Script Bot
-- **File:** `AutoFillOrderInfo_Upload.gs`
-- **Purpose:** Automates reading Discrepancy Log, calling the API, matching cards, and writing to Refund Log
-- **Throughput:** ~6,000-8,000 cards per hour
-- **Location:** Deployed in Google Sheets
+### 1. Google Apps Script (scripts/)
+**Main File:** `HelperDocAutomation.gs`
 
-### 2. PDF Parser Server (Legacy)
-- **Directory:** `pdf-parser-server/`
-- **Status:** Superseded by API approach
-- **Note:** Originally built for parsing SQ detail PDFs, but internal API is preferred solution
+**Features:**
+- Auto-pulls unclaimed SQ items from Discrepancy Log
+- Filters by: no initials, no solve date, not red-flagged, not in vault, location not "NONE"
+- Uploads and processes PDF via Vercel API
+- Matches cards using name, set, and condition
+- Sends completed items to Refund Log
+
+### 2. PDF Parser API (pdf-parser-server/)
+
+**Deployment:** <https://pdf-nine-psi.vercel.app/api/parse>
+
+**Technology:** Python + pdfplumber on Vercel serverless
+
+**Purpose:** Extracts order numbers, buyer names, and card details from SQ PDFs
 
 ## Documentation
 
-- **[AUTOMATION_PLAN.md](AUTOMATION_PLAN.md)** - Requirements document for Engineering (API specifications)
-- **[MATCHING_LOGIC.md](MATCHING_LOGIC.md)** - Card matching algorithm and logic
-- **[AGENTS.MD](AGENTS.MD)** - Current manual process documentation
+- **[docs/AUTOMATION_PLAN.md](docs/AUTOMATION_PLAN.md)** - Original API requirements
+- **[docs/MATCHING_LOGIC.md](docs/MATCHING_LOGIC.md)** - Card matching algorithm
+- **[docs/AGENTS.MD](docs/AGENTS.MD)** - Manual process documentation
 
-## Requirements
+## Workflow
 
-### From Engineering Team
-Internal API endpoint to lookup orders by SQ number:
+1. **Pull Unclaimed Items** - Auto-select first unclaimed SQ from Discrepancy Log
+2. **Upload PDF** - Upload SQ detail PDF to extract order information
+3. **Match Cards** - Automatically match cards to orders
+4. **Send to Refund Log** - Push completed refund data
+5. **Clear & Repeat** - Clear helper sheet and process next SQ
 
-```
-GET /api/internal/orders/by-sq/{sq_number}
+## Filter Criteria
 
-Response:
-{
-  "sq_number": "251013-236rmb",
-  "orders": [
-    {
-      "direct_order_number": "251012-2179",
-      "buyer_name": "Buyer Name",
-      "cards": [...]
-    }
-  ]
-}
-```
+Items are pulled if they meet ALL criteria:
 
-### Dependencies
+- ✅ No initials (unclaimed)
+- ✅ No solve date (unsolved)
+- ✅ NOT red background (doesn't need attention)
+- ✅ No manual intervention flag (not in vault)
+- ✅ LocationID != "NONE"
+
+## Dependencies
+
 - Google Apps Script (built-in to Google Sheets)
-- TCGplayer internal API (pending)
+- Vercel account (for PDF parser deployment)
 - Access to Discrepancy Log and Refund Log spreadsheets
-
-## How It Works
-
-1. Bot reads Discrepancy Log for unsolved cards
-2. For each SQ number, calls TCGplayer internal API
-3. API returns all orders in that SQ (with buyer names and card details)
-4. Bot matches cards from Discrepancy Log to orders and writes to Refund Log
-5. Bot updates Discrepancy Log with solve date
-
-## Testing
-
-- **File:** `test_matching.js`
-- Run matching logic tests to verify card matching accuracy
 
 ## Status
 
-- ✅ Bot implementation ready
-- ✅ Matching logic tested
-- ⏳ Awaiting internal API from Engineering
-- ⏳ Production deployment pending API availability
+- ✅ Automated workflow implemented
+- ✅ PDF parser deployed on Vercel
+- ✅ Card matching logic tested
+- ✅ Production ready
 
 ## License
 
