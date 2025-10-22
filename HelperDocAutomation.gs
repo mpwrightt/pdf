@@ -377,8 +377,19 @@ function callVercelAPI(blob) {
       muteHttpExceptions: true
     };
     
+    Logger.log(`Calling Vercel API: ${CONFIG.VERCEL_API_URL}`);
     const response = UrlFetchApp.fetch(CONFIG.VERCEL_API_URL, options);
-    const responseData = JSON.parse(response.getContentText());
+    const statusCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    Logger.log(`API Response Status: ${statusCode}`);
+    Logger.log(`API Response (first 500 chars): ${responseText.substring(0, 500)}`);
+    
+    if (statusCode !== 200) {
+      throw new Error(`API returned status ${statusCode}: ${responseText.substring(0, 200)}`);
+    }
+    
+    const responseData = JSON.parse(responseText);
     
     if (!responseData.success) {
       throw new Error(responseData.error || 'API request failed');
