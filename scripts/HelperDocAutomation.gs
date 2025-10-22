@@ -447,19 +447,35 @@ function fillOrderInfo(parsedOrders) {
 }
 
 /**
+ * Normalize condition to standard abbreviation
+ */
+function normalizeCondition(condition) {
+  const cond = condition.toLowerCase().trim();
+  
+  // Map various condition formats to standard abbreviations
+  if (cond.includes('near mint') || cond === 'nm' || cond === 'nmf') return 'nm';
+  if (cond.includes('lightly played') || cond.includes('light') || cond === 'lp' || cond === 'lpf') return 'lp';
+  if (cond.includes('moderately played') || cond.includes('moderate') || cond === 'mp' || cond === 'mpf') return 'mp';
+  if (cond.includes('heavily played') || cond.includes('heavy') || cond === 'hp' || cond === 'hpf') return 'hp';
+  if (cond.includes('damaged') || cond === 'dmg') return 'damaged';
+  
+  return cond; // Return as-is if no match
+}
+
+/**
  * Find matching order for a card
  */
 function findMatchingOrder(cardName, setName, condition, orders) {
   const normalizedCardName = cardName.toLowerCase().trim();
   const normalizedSetName = setName.toLowerCase().trim();
-  const normalizedCondition = condition.toLowerCase().trim();
+  const normalizedCondition = normalizeCondition(condition);
   
   for (const order of orders) {
     for (const card of order.cards) {
       const matchesName = card.name.toLowerCase().trim() === normalizedCardName;
       const matchesSet = card.setName.toLowerCase().includes(normalizedSetName) || 
                          normalizedSetName.includes(card.setName.toLowerCase());
-      const matchesCondition = card.condition.toLowerCase().includes(normalizedCondition);
+      const matchesCondition = normalizeCondition(card.condition) === normalizedCondition;
       
       if (matchesName && matchesSet && matchesCondition) {
         return {
