@@ -43,7 +43,7 @@ const CONFIG = {
     SET_NAME: 14,      // Column O
     CONDITION: 15,     // Column P
     QTY: 16            // Column Q
-  }
+  },
   
   // Refund Log Columns
   REFUND_COLS: {
