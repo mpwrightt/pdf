@@ -104,17 +104,17 @@ function pullUnclaimedItems() {
     const backgrounds = dataRange.getBackgrounds();
     Logger.log(`Total rows in sheet: ${data.length}`);
     Logger.log(`Total columns: ${data[0] ? data[0].length : 0}`);
-    Logger.log(`Checking columns - Initials: ${CONFIG.DISCREP_COLS.INITIALS}, ResType: ${CONFIG.DISCREP_COLS.RESOLUTION_TYPE}, SolveDate: ${CONFIG.DISCREP_COLS.SOLVE_DATE}, Manual: ${CONFIG.DISCREP_COLS.MANUAL_INTERVENTION}`);
+    Logger.log(`Checking columns - Initials: ${CONFIG.DISCREP_COLS.INITIALS}, SolveDate: ${CONFIG.DISCREP_COLS.SOLVE_DATE}, Manual: ${CONFIG.DISCREP_COLS.MANUAL_INTERVENTION}`);
     
-    // Find unclaimed items (no initials AND Missing Note)
+    // Find unclaimed items: no initials, no solve date, not red, not in vault
     const unclaimedItems = [];
     let debugCount = 0;
     
     Logger.log(`Starting to scan ${data.length - 1} data rows...`);
+    Logger.log(`Filter criteria: No initials + No solve date + Not red + Not in vault`);
     
     let skipCounts = {
       hasInitials: 0,
-      noResType: 0,
       hasSolveDate: 0,
       hasManual: 0,
       isRed: 0
@@ -147,19 +147,18 @@ function pullUnclaimedItems() {
       );
       
       // Track why items are skipped
+      // New simple logic: no initials, no solve date, not red, not in vault
       if (initials) {
         skipCounts.hasInitials++;
-      } else if (!resolutionType || !resolutionType.toString().includes('Missing Note')) {
-        skipCounts.noResType++;
       } else if (solveDate) {
         skipCounts.hasSolveDate++;
-      } else if (manualIntervention) {
-        skipCounts.hasManual++;
       } else if (isRedBackground) {
         skipCounts.isRed++;
         if (skipCounts.isRed === 1) {
           Logger.log(`First red background found at row ${i}: color='${sqBackgroundColor}'`);
         }
+      } else if (manualIntervention) {
+        skipCounts.hasManual++;
       } else {
         // All criteria met!
         Logger.log(`✓ Found unclaimed item at row ${i}: ${sqNumber}`);
@@ -178,21 +177,19 @@ function pullUnclaimedItems() {
     Logger.log(`Total unclaimed items found: ${unclaimedItems.length}`);
     Logger.log(`\nSkip breakdown:`);
     Logger.log(`  - Has initials (claimed): ${skipCounts.hasInitials}`);
-    Logger.log(`  - Missing "Missing Note" in ResType: ${skipCounts.noResType}`);
     Logger.log(`  - Has solve date (already solved): ${skipCounts.hasSolveDate}`);
-    Logger.log(`  - Has manual intervention flag: ${skipCounts.hasManual}`);
     Logger.log(`  - Red background (needs attention): ${skipCounts.isRed}`);
+    Logger.log(`  - Has manual intervention flag (in vault): ${skipCounts.hasManual}`);
     
     if (unclaimedItems.length === 0) {
       Logger.log('\nNo items matched ALL criteria. Check skip breakdown above.');
       ui.alert(
         'No Unclaimed Items', 
-        `No unclaimed "Missing Note" items found.\n\nSkipped:\n` +
+        `No unclaimed items found.\n\nSkipped:\n` +
         `- Has initials: ${skipCounts.hasInitials}\n` +
-        `- Missing ResType: ${skipCounts.noResType}\n` +
         `- Has solve date: ${skipCounts.hasSolveDate}\n` +
-        `- Manual flag: ${skipCounts.hasManual}\n` +
-        `- Red background: ${skipCounts.isRed}\n\n` +
+        `- Red background: ${skipCounts.isRed}\n` +
+        `- In vault: ${skipCounts.hasManual}\n\n` +
         `Check Extensions > Apps Script > Executions for details.`,
         ui.ButtonSet.OK
       );
