@@ -219,35 +219,26 @@ function pullUnclaimedItems() {
     // Write to current sheet (Helper Doc)
     const currentSheet = SpreadsheetApp.getActiveSheet();
     
-    // Clear existing data (keep header)
+    // Clear existing data (keep header rows 1-2)
     const lastRow = currentSheet.getLastRow();
-    if (lastRow > 1) {
-      currentSheet.getRange(2, 1, lastRow - 1, currentSheet.getLastColumn()).clearContent();
+    if (lastRow > 2) {
+      currentSheet.getRange(3, 1, lastRow - 2, currentSheet.getLastColumn()).clearContent();
     }
     
-    // Prepare rows to match Helper Doc columns
+    // Prepare rows - only columns J-Q (columns H-I stay empty for PDF data)
     const rowsToWrite = itemsForSQ.map(item => [
-      '',              // Column A (empty)
-      '',              // Column B (empty)
-      '',              // Column C (empty)
-      '',              // Column D (empty)
-      '',              // Column E (empty)
-      '',              // Column F (empty)
-      '',              // Column G (empty)
-      '',              // Column H - Order Number (HIDDEN, to be filled by PDF)
-      '',              // Column I - Buyer Name (HIDDEN, to be filled by PDF)
-      item.sqNumber,   // Column J - SQ Number
-      'Magic',         // Column K - Game
-      item.cardName,   // Column L - Card Name
+      item.sqNumber,     // Column J - SQ Number
+      'Magic',           // Column K - Game
+      item.cardName,     // Column L - Card Name
       item.collectorNum, // Column M - Card #
-      item.rarity,     // Column N - Rarity
-      item.setName,    // Column O - Set Name
-      item.condition,  // Column P - Condition
-      item.qty         // Column Q - Quantity
+      item.rarity,       // Column N - Rarity
+      item.setName,      // Column O - Set Name
+      item.condition,    // Column P - Condition
+      item.qty           // Column Q - Quantity
     ]);
     
-    // Write to sheet starting at row 2
-    currentSheet.getRange(2, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
+    // Write to sheet starting at row 3, column J (10th column)
+    currentSheet.getRange(3, 10, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
     
     ui.alert(
       'Items Loaded',
