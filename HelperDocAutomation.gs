@@ -84,9 +84,7 @@ function pullUnclaimedItems() {
   try {
     // Get Discrepancy Log
     const discrepLog = SpreadsheetApp.openById(CONFIG.DISCREP_LOG_ID);
-    const discrepSheet = discrepLog.getSheets()[0];
-    
-    // Get all data
+    const discrepSheet = discrepLog.getSheetByName('SQ Discrepancy Log');
     const dataRange = discrepSheet.getDataRange();
     const data = dataRange.getValues();
     
@@ -448,7 +446,7 @@ function sendToRefundLog() {
  */
 function writeToRefundLog(items) {
   const refundLog = SpreadsheetApp.openById(CONFIG.REFUND_LOG_ID);
-  const refundSheet = refundLog.getSheets()[0];
+  const refundSheet = refundLog.getSheetByName('Refund Log');
   
   // Find next empty row
   const lastRow = refundSheet.getLastRow();
