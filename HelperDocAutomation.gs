@@ -27,7 +27,7 @@ const CONFIG = {
     SET_NAME: 7,       // Column H (Set)
     CONDITION: 8,      // Column I
     QTY: 9,            // Column J
-    INITIALS: 14,      // Column O (Inv. Initials - for claiming)
+    INITIALS: 12,      // Column M (Inv. Initials - for claiming)
     RESOLUTION_TYPE: 13, // Column N (Resolution Type - "Missing Note")
     SOLVE_DATE: 15     // Column P (Solve Date)
   },
