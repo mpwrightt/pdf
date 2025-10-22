@@ -252,7 +252,9 @@ class handler(BaseHTTPRequestHandler):
         
         # Pattern 4: Extreme split case (card name on one line, Bin+qty on next)
         # Handles cases where condition might be split across 3 lines
-        pattern_split = r'([A-Z][\w\s,\(\)]+?)\s+-\s+#(\d+)\s+-\s+(\w+)\s+-\s+([A-Za-z\s]+)$'
+        # Include hyphen in card name pattern and prevent cross-line matches by excluding newlines
+        # Use ^ anchor to ensure we start at the beginning of a line
+        pattern_split = r'^([A-Z][\w ,\(\)\-]+?)\s+-\s#(\d+)\s+-\s+(\w+)\s+-\s+([A-Za-z ]+)$'
         
         for match in re.finditer(pattern_split, order_text, re.MULTILINE):
             match_end = match.end()
