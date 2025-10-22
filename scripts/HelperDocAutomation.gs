@@ -436,7 +436,14 @@ function fillOrderInfo(parsedOrders) {
     if (!cardName) continue; // Skip empty rows
     
     Logger.log(`Row ${i + 1}: Looking for match - ${cardName} | ${setName} | ${condition}`);
-    
+
+    // Add debug logging for Emblem card
+    if (cardName.includes('Emblem') && cardName.includes('Liliana')) {
+      Logger.log(`  DEBUG: Raw card name: ${JSON.stringify(cardName)}`);
+      const normalized = cardName.replace(/\s*\n\s*/g, ' ').replace(/\s+/g, ' ').replace(/\s*,\s*/g, ',').toLowerCase().trim();
+      Logger.log(`  DEBUG: Normalized: ${JSON.stringify(normalized)}`);
+    }
+
     // Find matching order
     const matchedOrder = findMatchingOrder(cardName, setName, condition, parsedOrders);
     
@@ -493,6 +500,19 @@ function findMatchingOrder(cardName, setName, condition, orders) {
         .replace(/\s*,\s*/g, ',')
         .toLowerCase()
         .trim();
+      
+      // Debug logging for Emblem card
+      if (normalizedCardName.includes('emblem') && normalizedCardName.includes('liliana')) {
+        if (cardNameNormalized.includes('emblem') && cardNameNormalized.includes('liliana')) {
+          Logger.log(`  DEBUG: Found Emblem in PDF: ${JSON.stringify(card.name)}`);
+          Logger.log(`  DEBUG: PDF normalized: ${JSON.stringify(cardNameNormalized)}`);
+          Logger.log(`  DEBUG: CSV normalized: ${JSON.stringify(normalizedCardName)}`);
+          Logger.log(`  DEBUG: Names match: ${cardNameNormalized === normalizedCardName}`);
+          Logger.log(`  DEBUG: Set match: ${card.setName} vs ${setName}`);
+          Logger.log(`  DEBUG: Condition: ${normalizeCondition(card.condition)} vs ${normalizedCondition}`);
+        }
+      }
+      
       const matchesName = cardNameNormalized === normalizedCardName;
       const matchesSet = card.setName.toLowerCase().includes(normalizedSetName) || 
                          normalizedSetName.includes(card.setName.toLowerCase());
