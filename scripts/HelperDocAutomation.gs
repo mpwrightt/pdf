@@ -48,22 +48,23 @@ const CONFIG = {
     QTY: 16            // Column Q
   },
   
-  // Refund Log Columns
   REFUND_COLS: {
     ORDER_NUMBER: 3,   // Column D
     BUYER_NAME: 4,     // Column E
     SQ_NUMBER: 5,      // Column F
     GAME: 6,           // Column G
-    CARD_NUM: 7,       // Column H
-    RARITY: 8,         // Column I
-    SET_NAME: 9,       // Column J
-    CONDITION: 10,     // Column K
-    QUANTITY: 11       // Column L
+    CARD_NAME: 7,      // Column H (Card Name)
+    CARD_NUM: 8,       // Column I (Card #)
+    RARITY: 9,         // Column J
+    SET_NAME: 10,      // Column K
+    CONDITION: 11,     // Column L
+    QUANTITY: 12       // Column M
   }
 };
 
 /**
  * Creates custom menu when spreadsheet opens
+{{ ... }}
  */
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
@@ -610,6 +611,7 @@ function writeToRefundLog(items) {
     row[CONFIG.REFUND_COLS.BUYER_NAME] = item.buyerName;
     row[CONFIG.REFUND_COLS.SQ_NUMBER] = item.sqNumber;
     row[CONFIG.REFUND_COLS.GAME] = 'Magic';
+    row[CONFIG.REFUND_COLS.CARD_NAME] = item.cardName;
     row[CONFIG.REFUND_COLS.CARD_NUM] = item.collectorNum;
     row[CONFIG.REFUND_COLS.RARITY] = item.rarity;
     row[CONFIG.REFUND_COLS.SET_NAME] = item.setName;
