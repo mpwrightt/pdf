@@ -13,14 +13,15 @@ const CONFIG = {
   VERCEL_API_URL: 'https://pdf-nine-psi.vercel.app/api/parse',
   
   // Discrepancy Log
-  DISCREP_LOG_ID: '1Jyf236hcpsm-x5TONHQ5tbxtFM9gfjg-BAGYwk4BNtI',
+  DISCREP_LOG_ID: '1m0dSOA2VogToEpAo6Jj7FEEsfJbWi1W48xiyTHkBNyY',
   
   // Refund Log
-  REFUND_LOG_ID: '1uMF_4fluOcnnDsUPLFpM-oWfIpd1HD6Ij4d8UNlgaFc',
+  REFUND_LOG_ID: '1raaUEsPoMl5dEZwilnHtBwdR0wOV2JRqYzdlVYMdohI',
   
   // Discrepancy Log Columns (based on actual sheet layout)
   DISCREP_COLS: {
     SQ_NUMBER: 2,      // Column C
+    GAME: 3,           // Column D
     CARD_NAME: 4,      // Column E
     COLLECTOR_NUM: 5,  // Column F (Number)
     RARITY: 6,         // Column G
@@ -121,6 +122,11 @@ function pullUnclaimedItems() {
     Logger.log(`Total rows in sheet: ${data.length}`);
     Logger.log(`Total columns: ${data[0] ? data[0].length : 0}`);
     Logger.log(`Checking columns - Initials: ${CONFIG.DISCREP_COLS.INITIALS}, SolveDate: ${CONFIG.DISCREP_COLS.SOLVE_DATE}, Manual: ${CONFIG.DISCREP_COLS.MANUAL_INTERVENTION}`);
+    // Detect Game column index from header if available (fallback to CONFIG)
+    const header = data[0] || [];
+    const headerGameIdx = header.findIndex(h => (h || '').toString().trim().toLowerCase() === 'game');
+    const GAME_IDX = headerGameIdx >= 0 ? headerGameIdx : CONFIG.DISCREP_COLS.GAME;
+    Logger.log(`Detected Game column index: ${GAME_IDX} (header: ${header[GAME_IDX]})`);
     
     // Find unclaimed items: no initials, no solve date, not red, not in vault
     const unclaimedItems = [];
@@ -185,6 +191,7 @@ function pullUnclaimedItems() {
         unclaimedItems.push({
           rowIndex: i + 1, // 1-based row index in Discrepancy Log
           sqNumber: row[CONFIG.DISCREP_COLS.SQ_NUMBER],
+          game: row[GAME_IDX],
           cardName: row[CONFIG.DISCREP_COLS.CARD_NAME],
           collectorNum: row[CONFIG.DISCREP_COLS.COLLECTOR_NUM],
           rarity: row[CONFIG.DISCREP_COLS.RARITY],
@@ -267,7 +274,7 @@ function pullUnclaimedItems() {
     // Prepare rows - only columns J-Q (columns H-I stay empty for PDF data)
     const rowsToWrite = itemsForSQ.map(item => [
       item.sqNumber,     // Column J - SQ Number
-      'Magic',           // Column K - Game
+      (item.game || 'Magic'), // Column K - Game
       item.cardName,     // Column L - Card Name
       item.collectorNum, // Column M - Card #
       item.rarity,       // Column N - Rarity
@@ -660,6 +667,7 @@ function sendToRefundLog() {
           orderNumber: orderNumber,
           buyerName: buyerName,
           sqNumber: row[CONFIG.HELPER_COLS.SQ_NUMBER],
+          game: row[CONFIG.HELPER_COLS.GAME],
           cardName: row[CONFIG.HELPER_COLS.CARD_NAME],
           collectorNum: row[CONFIG.HELPER_COLS.COLLECTOR_NUM],
           rarity: row[CONFIG.HELPER_COLS.RARITY],
@@ -681,7 +689,7 @@ function sendToRefundLog() {
     incrementCounters(1, completedItems.length);
     const counters = getCounters();
     ui.alert('Success', `${completedItems.length} items sent to Refund Log!\nTotals so far: ${counters.sq} SQ(s), ${counters.rows} row(s).`, ui.ButtonSet.OK);
-    ui.toast(`Totals — SQs: ${counters.sq} | Rows: ${counters.rows}`, 'Counters', 5);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`Totals — SQs: ${counters.sq} | Rows: ${counters.rows}`, 'Counters', 5);
     
   } catch (error) {
     Logger.log('Error in sendToRefundLog: ' + error.toString());
@@ -709,7 +717,7 @@ function writeToRefundLog(items) {
     row[CONFIG.REFUND_COLS.ORDER_NUMBER] = item.orderNumber;
     row[CONFIG.REFUND_COLS.BUYER_NAME] = item.buyerName;
     row[CONFIG.REFUND_COLS.SQ_NUMBER] = item.sqNumber;
-    row[CONFIG.REFUND_COLS.GAME] = 'Magic';
+    row[CONFIG.REFUND_COLS.GAME] = item.game || 'Magic';
     row[CONFIG.REFUND_COLS.CARD_NAME] = item.cardName;
     row[CONFIG.REFUND_COLS.CARD_NUM] = item.collectorNum;
     row[CONFIG.REFUND_COLS.RARITY] = item.rarity;
@@ -745,4 +753,30 @@ function clearHelperSheet() {
     }
     ui.alert('Cleared', 'Helper sheet cleared.', ui.ButtonSet.OK);
   }
+}
+
+/**
+ * Counters: total SQs processed and total rows sent
+ */
+function getCounters() {
+  const props = PropertiesService.getDocumentProperties();
+  const sq = parseInt(props.getProperty(CONFIG.COUNTER_KEYS.SQ), 10) || 0;
+  const rows = parseInt(props.getProperty(CONFIG.COUNTER_KEYS.ROWS), 10) || 0;
+  return { sq, rows };
+}
+
+function incrementCounters(sqDelta, rowDelta) {
+  const props = PropertiesService.getDocumentProperties();
+  const current = getCounters();
+  const nextSq = current.sq + (sqDelta || 0);
+  const nextRows = current.rows + (rowDelta || 0);
+  props.setProperty(CONFIG.COUNTER_KEYS.SQ, String(nextSq));
+  props.setProperty(CONFIG.COUNTER_KEYS.ROWS, String(nextRows));
+}
+
+function resetCounters() {
+  const props = PropertiesService.getDocumentProperties();
+  props.deleteProperty(CONFIG.COUNTER_KEYS.SQ);
+  props.deleteProperty(CONFIG.COUNTER_KEYS.ROWS);
+  SpreadsheetApp.getActiveSpreadsheet().toast('Counters reset.', 'Counters', 3);
 }

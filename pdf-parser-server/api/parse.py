@@ -177,18 +177,16 @@ class handler(BaseHTTPRequestHandler):
             condition = match.group(5).strip()
             set_name = ""
             
-            # Check if condition has "Magic -" already
-            if "Magic -" in condition:
-                parts = condition.split("Magic -", 1)
-                condition = parts[0].strip()
-                set_name = parts[1].strip() if len(parts) > 1 else ""
+            # Generic "<Game> - <Set>" splitter on same line as condition
+            m_line = re.match(r'^(.*?)\s+[A-Za-z]+\s+-\s+(.+)$', condition)
+            if m_line:
+                condition = m_line.group(1).strip()
+                set_name = m_line.group(2).strip()
             else:
-                # Set name on next line
+                # Set name may be on the next line; try to split "<Game> - <Set>"
                 if next_line and not next_line.startswith('Bin') and not re.match(r'^\d+\s+', next_line):
-                    if "Magic -" in next_line:
-                        set_name = next_line.split("Magic -", 1)[1].strip() if "Magic -" in next_line else next_line
-                    else:
-                        set_name = next_line
+                    m_next = re.match(r'^[A-Za-z]+\s+-\s+(.+)$', next_line)
+                    set_name = m_next.group(1).strip() if m_next else next_line
             
             card_key = f"{match.group(2)}|{match.group(3)}|{condition}"
             if card_key not in seen_cards:
@@ -203,8 +201,8 @@ class handler(BaseHTTPRequestHandler):
                 })
         
         # Pattern 2: Standard format (no Bin prefix)
-        # Matches: "1 CardName - #123 - R - Condition Magic - Set"
-        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+(.+?)\s+Magic\s+-\s+(.+?)$'
+        # Matches: "1 CardName - #123 - R - Condition <Game> - Set" (Game can be Magic, Pokemon, etc.)
+        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+(.+?)\s+[A-Za-z]+\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_standard, order_text, re.MULTILINE):
             condition = match.group(5).strip()
@@ -231,11 +229,11 @@ class handler(BaseHTTPRequestHandler):
             condition = match.group(4).strip()
             set_name = ""
             
-            # Check if condition has "Magic -" already
-            if "Magic -" in condition:
-                parts = condition.split("Magic -", 1)
-                condition = parts[0].strip()
-                set_name = parts[1].strip() if len(parts) > 1 else ""
+            # Generic "<Game> - <Set>" splitter on same line as condition
+            m_line = re.match(r'^(.*?)\s+[A-Za-z]+\s+-\s+(.+)$', condition)
+            if m_line:
+                condition = m_line.group(1).strip()
+                set_name = m_line.group(2).strip()
             
             # Use card name + set + condition as key since no collector number
             card_key = f"{match.group(2)}|{set_name}|{condition}"
@@ -264,7 +262,7 @@ class handler(BaseHTTPRequestHandler):
             next_line = order_text[next_line_start:next_line_end].strip()
             
             # Check if next line has Bin info
-            bin_match = re.match(r'Bin\s+[\w\-]+\s+(\d+)\s+Magic\s+-\s+(.+)', next_line)
+            bin_match = re.match(r'Bin\s+[\w\-]+\s+(\d+)\s+[A-Za-z]+\s+-\s+(.+)', next_line)
             if bin_match:
                 # Condition from first line
                 condition_part1 = match.group(4).strip()
@@ -308,7 +306,7 @@ class handler(BaseHTTPRequestHandler):
                 next_line_end = len(order_text)
             next_line = order_text[next_line_start:next_line_end].strip()
 
-            bin_match = re.match(r'Bin\s+[\w\-]+\s+(\d+)\s+Magic\s+-\s+(.+)', next_line)
+            bin_match = re.match(r'Bin\s+[\w\-]+\s+(\d+)\s+[A-Za-z]+\s+-\s+(.+)', next_line)
             if bin_match:
                 # Condition expected on the following line
                 third_line_start = next_line_end + 1
@@ -335,7 +333,7 @@ class handler(BaseHTTPRequestHandler):
         #   Hakbal ... - #19 - M - Lightly Magic - Commander: The Lost Caverns of
         #   Bin 8 1
         #   Played Foil Ixalan
-        pattern_split_bin_simple = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+([A-Za-z]+)\s+Magic\s+-\s+(.+)$'
+        pattern_split_bin_simple = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+([A-Za-z]+)\s+[A-Za-z]+\s+-\s+(.+)$'
         condition_tokens_whitelist = {
             'near', 'mint', 'lightly', 'played', 'moderately', 'heavily', 'damaged', 'foil',
             'nm', 'lp', 'mp', 'hp', 'nif', 'lpf', 'mpf', 'nmf', 'good', 'excellent', 'poor',
