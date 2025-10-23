@@ -1,216 +1,112 @@
-# Pull Discrep Refunds (Confirmed Missing Cards)
+# Pull Discrep Refunds (Agent Playbook)
 
-## Overview
-Process for refunding cards not found during the pulling process by Shipping Generalists or in the discrepancy solving process by Inventory Specialists.
+## Mission
+
+Process confirmed-missing cards efficiently using the automated helper sheet and PDF parser. Only fall back to manual refund workflows when automation cannot resolve a row.
 
 ## Required Access
+
+- [Discrepancy Helper Sheet](https://docs.google.com/spreadsheets/d/1hrKt4XvlxytyY2ZqYVXjCOAS97WzNWnxaHOzLc0kv_c/edit?gid=0#gid=0)
+- [Discrepancy Log](https://docs.google.com/spreadsheets/d/1m0dSOA2VogToEpAo6Jj7FEEsfJbWi1W48xiyTHkBNyY/edit?gid=1984354615#gid=1984354615)
 - [Inventory Refund Log](https://docs.google.com/spreadsheets/d/1raaUEsPoMl5dEZwilnHtBwdR0wOV2JRqYzdlVYMdohI/edit?gid=1331496674#gid=1331496674)
-- [Discrepancy Help Docs](https://docs.google.com/spreadsheets/d/1hrKt4XvlxytyY2ZqYVXjCOAS97WzNWnxaHOzLc0kv_c/edit?gid=0#gid=0)
-- [Discrepancy Log](https://docs.google.com/spreadsheets/d/1m0dSOA2VogToEpAo6Jj7FEEsfJbWi1W48xiyTHkBNyY/edit?pli=1&gid=1984354615#gid=1984354615)
-- [Admin Panel](https://store.tcgplayer.com/admin/Direct)
+- [Direct Admin Panel](https://store.tcgplayer.com/admin/Direct) (for issuing refunds)
 
----
+## First-Time Setup
 
-## First Time Setup
+- Open the Helper Sheet, authorize the Apps Script if prompted, and ensure the custom menu `🤖 Refund Tools` appears.
+- Confirm you can access the Discrepancy Log and Refund Log with edit rights.
+- Optional: clone the repo and run `pip install -r pdf-parser-server/requirements.txt` if you plan to debug the parser locally.
 
-1. Open the [Helper Docs](https://docs.google.com/spreadsheets/d/1hrKt4XvlxytyY2ZqYVXjCOAS97WzNWnxaHOzLc0kv_c/edit?gid=0#gid=0)
-2. Navigate to the "Paste Here" tab
+## Daily Runbook
 
-**Note:** For CX Department assisting with Discrep/Refunds, everything is marked as a Missing Note. Take anything unsolved, initial it to claim it, and copy to the Helper Batch Docs.
+1. **Claim an SQ**
+   - In the Discrepancy Log, filter for unsolved rows (`Initials` blank, `Solve Date` blank, not red, not vault, `LocationID != "NONE"`).
+   - In the Helper Sheet run `🤖 Refund Tools > 1️⃣ Claim Next SQ`. Your initials will populate and the sheet pulls the first eligible SQ automatically.
 
----
+2. **Upload PDF**
+   - Use `🤖 Refund Tools > 2️⃣ Upload SQ PDF` and select the PDF downloaded from the Discrepancy Log link (Print Sheets → PDF).
+   - Watch the execution logs (`View > Executions`) for parsing status. Successful runs show `Found XX orders` and `Matched!` messages for each row.
 
-## Add Data to Batch Discrepancy Notes Tool
+3. **Resolve unmatched rows**
+   - Any `✗ No match found` lines indicate cards the parser could not map. Steps:
+     - Verify the collector number in the helper table matches the parser output. If the PDF contains a new layout, collect the raw text segment and notify engineering.
+     - If automation still fails, manually search the PDF, record the Direct Order # / Buyer Name, and fill the helper row by hand (also log the reason in Archon).
 
-### Steps
+4. **Send to Refund Log**
+   - After every row has a Direct Order #, run `🤖 Refund Tools > 4️⃣ Send to Refund Log`.
+   - Double-check the pasted rows at the bottom of the Refund Log before proceeding.
 
-1. **Copy from Discrepancy Log**
-   - Look for missing note solves
-   - Copy from Column C (SQs) to Column J (Quantity)
+5. **Clear helper sheet**
+   - Run `🤖 Refund Tools > 5️⃣ Clear Helper Sheet` to prep for the next SQ.
 
-2. **Paste to Batch Discrepancy**
-   - Paste in Column J (SQ Number) using `Ctrl+Shift+V` (paste values only)
-   - This will auto-fill needed columns
+## Automation Internals (for debugging)
 
-3. **Look up Buyer Info for Each Line**
-   - Click the "SQ Link" for each line/SQ
-   - Download PDF by clicking "Print Sheets"
-   - Search for missing card(s) using `Ctrl+F`
-     - Verify only 1 match exists (check Condition, Set, Printing type like Extended Art)
-   - Copy Direct Order Number and Buyer Name from PDF to Batch Discrep Notes tool (use `Ctrl+Shift+V`)
+- Parser endpoint: `pdf-parser-server/api/parse.py` deployed to `https://pdf-nine-psi.vercel.app/api/parse`.
+- `normalizeCollector()` handles alphanumeric collectors, splits like `DOOD-EN 085`, and strips leading `#`.
+- `normalizeCondition()` maps verbose text (e.g., `Near Mint 1st Edition`, `Lightly Played Foil`) to canonical codes.
+- Logs show fallback usage. A collector-based fallback is acceptable as long as the collector matches and either set or name aligns.
 
-**Important:** If two buyers have the same exact card, refund ALL buyers for CX Department purposes.
+### When to escalate parser issues
 
----
+- Repeated unmatched rows for the same pattern (new PDF layout).
+- Parser returns zero cards for a PDF known to contain multiple orders.
+- Condition strings still include game tokens after normalization (e.g., `Lightly Played Magic`).
 
-## Update the Refund Log
+Capture the raw PDF text block (use `pdfplumber` or the Apps Script log) and open a GitHub issue or Archon task referencing `pdf-parser-server/api/parse.py`.
 
-1. **Copy Refund Data**
-   - Copy from 'H3' to last line of 'Q' (Direct Order # to QTY)
+## Manual Refund Flow
 
-2. **Paste to Refund Log**
-   - Find next open lines at bottom of [Refund Log](https://docs.google.com/spreadsheets/d/1raaUEsPoMl5dEZwilnHtBwdR0wOV2JRqYzdlVYMdohI/edit?gid=1331496674#gid=1331496674)
-   - Paste values only (`Ctrl+Shift+V`) starting in Column 'C' (Order Number)
+Use the automated data as the source of truth. When manual refunds are required, follow the steps below.
 
-3. **Handle Highlighted Orders**
-   - **Blue highlight** = Duplicate order
-     - Use `Ctrl/Cmd+F` to locate other associated orders
-     - Move them next to each other if possible
-   - **Yellow highlight** = International order
-     - Follow [International Refund procedure](#international-refunds)
+### Partial refunds
 
-4. **Assign Resolution**
-   - Click dropdown menu and select the solve
-   - Enter today's date in 'Solve Date' column
-   - **Note:** For CX Department, everything is marked as "Missing Note"
+1. Open the order from the Refund Log (Column C hyperlink).
+2. Click **Partial Refund** in the Direct Admin panel.
+3. Enter the refund quantity for each card from the helper sheet.
+4. Apply macros:
 
----
-
-## Setup for Refunds
-
-1. Log into old Seller Portal Admin Panel (if not already logged in)
-   - Needed for checking orders and issuing refunds
-
-2. Open Refund Log spreadsheet
-   - Check how many instances are older than current date
-   - **Ignore entries from today's date** (cards may be found or incorrect cards marked)
-
----
-
-## Solving Refunds
-
-### Initial Steps
-
-1. Go to first unsolved order in log
-2. Type your initials under "Initials" column to claim a run
-   - Solved orders have initials + monetary value in original amount column
-
-**Important:** If yellow highlighted order is in your batch, follow [International Refund](#international-refunds) procedure.
-
-### Partial Refunds
-
-1. **Open the Order**
-   - Hover over order hyperlink and click to open
-
-2. **Find the Card**
-   - Use `Ctrl/Cmd+F` to search for the card
-   - Verify correct condition and set
-   - Tip: Keep second Refund Log window open to avoid toggling
-
-3. **Initiate Partial Refund**
-   - Right-click "Partial Refund" button
-   - Open in separate window
-
-4. **Enter Refund Quantity**
-   - Scroll to bottom and find the card
-   - Enter number of cards in "Refund Quantity" box
-
-5. **Add Refund Reason (First Card)**
-   - **Macro:** "Domestic refunds"
-
-   ```
-   TCGplayer is fully refunding this card due to an unfortunate inventory issue. We have applied an additional $1.00 in store credit to your TCGplayer account so you can purchase it from another Seller on our site. We're sorry for any inconvenience this may cause you.
-   ```
-
-6. **Add Refund Reason (Additional Cards on Same Order)**
-   - **Macro:** "Duplicate refund"
-
-   ```
-   TCGplayer is fully refunding this card due to an unfortunate inventory issue. We're sorry for any inconvenience this may cause you.
-   ```
-
-7. **Select Refund Reason Category**
-   - From dropdown: "Product - Inventory Issue"
-   - Used for ALL refunds
-
-8. **Apply Store Credit**
-   - Check "Apply $1.00 TCGplayer store credit" box
-   - **Rules:**
-     - Multiple cards from same order = store credit ONCE
-     - Same customer, different orders in same SQ = store credit for EACH order
-   - **International orders:** DO NOT apply $1.00 credit during refund (see [International Refunds](#international-refunds))
-
-9. **Complete Refund**
-   - Enter total "Refund Amount" into "Original Amount" column in Refund Log
-   - Click "Give Refund" button (bottom left)
-   - Click "Yes" on confirmation prompt
-   - **Note:** System will NOT remind you about store credit - double-check!
-
-### Full Refund (One Card Orders)
-
-1. **Click "Full Refund" button** (top left of page)
-2. Apply refunding reasons in text box
-3. **Still check 'apply the 1-dollar store credit' box**
-   - Customer receives card price + shipping refund
-
----
-
-## International Refunds
-
-**Key Differences:**
-- DO NOT apply $1.00 store credit during refund itself
-- Use "International Refund" macro instead of "Domestic Refund"
-- Manually add $5.99 store credit separately
-
-### Refund Reason Macro
-
-```
-TCGplayer is fully refunding this card due to an unfortunate inventory issue. We have applied an additional $5.99 in store credit to your TCGplayer account so you can purchase it from another Seller on our site. We're sorry for any inconvenance this may cause you.
-```
-
-### Manual Store Credit Steps
-
-1. **Access Customer Account**
-   - On order page, click button beside customer email
-
-2. **Add Store Credit**
-   - Find "Store Credit" box
-   - Click "Add/Remove Store Credit" button (top right)
-
-3. **Enter Credit Details**
-   - Amount: `5.99`
-   - Note: "International refund Order Number" macro
-
-   ```
-   Product not in Direct Inventory Order #XXXXXXXX.
-   ```
-
-4. **Save and Continue**
-   - Hit "Save" button
-   - Proceed with rest of refund as normal
-
----
-
-## Key Notes
-
-- **CX Department:** All issues marked as "Missing Note"
-- **Duplicate Cards:** Refund all buyers
-- **Store Credit:**
-  - Domestic: $1.00 per order
-  - International: $5.99 per order (manual process)
-- **Same-day entries:** Ignored (cards may still be found)
-- **Verification:** Always check card condition, set, and printing type
-
----
-
-## Macros Quick Reference
-
-### Domestic Refund (First Card)
-```
+```text
+Domestic refund (first card):
 TCGplayer is fully refunding this card due to an unfortunate inventory issue. We have applied an additional $1.00 in store credit to your TCGplayer account so you can purchase it from another Seller on our site. We're sorry for any inconvenience this may cause you.
-```
 
-### Duplicate Refund (Additional Cards)
-```
+Duplicate refund (additional cards):
 TCGplayer is fully refunding this card due to an unfortunate inventory issue. We're sorry for any inconvenience this may cause you.
 ```
 
-### International Refund
-```
-TCGplayer is fully refunding this card due to an unfortunate inventory issue. We have applied an additional $5.99 in store credit to your TCGplayer account so you can purchase it from another Seller on our site. We're sorry for any inconvenance this may cause you.
-```
+5. Set reason category to **Product - Inventory Issue**.
+6. Apply $1.00 store credit per order (domestic only). International orders follow the flow below.
+7. Submit the refund, then record the refund amount in the Refund Log `Original Amount` column and add your initials.
 
-### International Order Note
-```
+### Full refunds (single-card orders)
+
+- Use **Full Refund**, still add the macro, and apply store credit when appropriate.
+
+### International orders
+
+- Do **not** apply the $1.00 credit during the refund.
+- Use the international macro and grant $5.99 store credit manually:
+
+```text
+International macro:
+TCGplayer is fully refunding this card due to an unfortunate inventory issue. We have applied an additional $5.99 in store credit to your TCGplayer account so you can purchase it from another Seller on our site. We're sorry for any inconvenience this may cause you.
+
+Store credit note:
 Product not in Direct Inventory Order #XXXXXXXX.
 ```
+
+- Add the credit through the customer account screen after the refund.
+
+## Quality Checklist
+
+- **Blue highlights** in the Refund Log indicate duplicates. Group them together and confirm both refunds were issued.
+- **Yellow highlights** indicate international orders. Follow the international flow.
+- Ignore same-day entries in the Refund Log until the next business day (the card may still arrive).
+- After each batch, update Archon: mark the task from *doing* → *review* and document any manual interventions or parser anomalies.
+
+## Escalation
+
+- **Automation failure:** Share the SQ number, PDF, and helper log lines in the engineering channel. Reference the relevant functions (`normalizeCollector()` or parser pattern) and attach screenshots where possible.
+- **Refund issues:** If the Direct Admin panel cannot complete a refund, capture error text and escalate to Billing Operations.
+- **Customer communication:** CX-specific messaging changes should be coordinated with the CX lead; do not alter macros without approval.
+
+Staying aligned with this playbook keeps the automation reliable and ensures new agents can step into the workflow with minimal ramp time.
