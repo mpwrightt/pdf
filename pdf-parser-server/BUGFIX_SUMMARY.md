@@ -227,53 +227,75 @@ Changes:
 
 ---
 
-## Issue 7: Buyer Names with Alphanumeric Street Addresses
-**Commits:** `4be3233` (initial fix), `0669b50` (scope restriction fix)
-**Date:** Oct 23, 2025 17:30-17:45
+## Issue 7: Buyer Names with Non-Standard Address Formats
+**Commits:** `4be3233` (initial), `0669b50` (scope fix), `0bd2267` (international/Hawaiian)
+**Date:** Oct 23, 2025 17:30-18:00
 
 ### Problem
-Buyer names were not extracted when the street address started with alphanumeric characters instead of just digits.
-
-Example address: "N58W23783 Hastings Ct" (Wisconsin-style address with directional prefix)
+Buyer names were not extracted when addresses used non-standard formats:
+- Wisconsin-style: "N58W23783 Hastings Ct" (alphanumeric with directional prefix)
+- Hawaiian: "91-111 MAKAALOA PL" (hyphenated house numbers)
+- Puerto Rico: "HC 3 BOX 37578" (Highway Contract)
+- Rural: "RR 2 Box 123" (Rural Route)
 
 ### Root Cause (Initial)
-Name regex pattern required addresses to start with a digit (`\d+`). Wisconsin-style addresses use directional prefixes (N=North, S=South, E=East, W=West) followed by coordinates.
+Name regex pattern required addresses to start with a digit (`\d+`), excluding alphanumeric and special regional formats.
 
-### Solution (Initial - Commit 4be3233)
-Broadened address pattern to accept any alphanumeric start:
+### Solution (Phase 1 - Commit 4be3233)
+Broadened address pattern to accept alphanumeric starts:
 ```regex
 Before: \d+[ \t]+[\w \t]+
 After:  [A-Za-z0-9]+[ \t]+[\w \t]+
 ```
 
 ### Problem (Regression)
-The broadened pattern was too permissive and matched seller names and set names from the "Included Orders" table instead of buyer names. Examples of incorrect matches:
+The broadened pattern was too permissive and matched seller names and set names from the "Included Orders" table. Examples:
 - "Commander Masters" (set name)
 - "The List Reprints" (set name)
-- "Dominaria United" (set name)
 - "Included Orders" (table header)
 
-### Root Cause (Regression)
-Pattern was searching the entire order text, and "Included Orders" followed by table headers looked like a name + address. Taking the last match selected names from the wrong section.
-
-### Solution (Final - Commit 0669b50)
-Restricted the search scope to only the "Shipping Address" section:
+### Solution (Phase 2 - Commit 0669b50)
+Restricted search scope to only the "Shipping Address" section:
 - Extract text between `Shipping Address\n` and `Shipping Method:`
-- Search for name pattern only within that section
-- Take first match (the recipient name)
+- Search only within that section
+- Take first match (recipient name)
 - Added exclusions: "Included Orders", "Seller Name", "Order Number"
 
-### Examples Fixed
-- "Ryan Nelsen-Freund" with "N58W23783 Hastings Ct" ✓
-- Order: 251013-9BDB ✓
-- All previous address formats still work ✓
-- No longer matches set names or seller names ✓
+### Problem (Hawaiian/International)
+Hawaiian addresses with hyphenated house numbers ("91-111") and Puerto Rico HC addresses were not matching because hyphen wasn't in character class `[A-Za-z0-9]+`.
+
+### Solution (Phase 3 - Commit 0bd2267)
+Added hyphen support and explicit patterns for regional formats:
+```regex
+Main pattern: [A-Za-z0-9\-]+[ \t]+[A-Za-z0-9 \t]+
+HC pattern: HC[ \t]+\d+[ \t]+BOX[ \t]+[\w\-]+
+RR pattern: RR[ \t]+\d+[ \t]+Box[ \t]+[\w\-]+
+```
+
+### All Supported Address Formats
+- ✅ Regular: "123 Main St"
+- ✅ Wisconsin: "N58W23783 Hastings Ct"
+- ✅ Hawaiian: "91-111 MAKAALOA PL"
+- ✅ Puerto Rico HC: "HC 3 BOX 37578"
+- ✅ Puerto Rico HC: "HC 5 BOX 10666"
+- ✅ Rural Route: "RR 2 Box 123"
+- ✅ PO BOX: "PO BOX 1406"
+- ✅ Military CMR: "CMR 473 Box 546"
+- ✅ Military APO: "APO AP 96555"
+- ✅ Military FPO: "FPO AE 09499"
+
+### Verified Names Extracted
+- "Ryan Nelsen-Freund" (Wisconsin address)
+- "Jordan Hunt" (Hawaiian address)
+- "Fernando Gonzalez" (Puerto Rico HC)
+- "Manuel A Geraldino" (Puerto Rico HC with middle initial)
 
 ---
 
 ## Commit History
 
 ```
+0bd2267 - fix: support Hawaiian and international address formats (HC, RR, hyphenated house numbers)
 0669b50 - fix: restrict buyer name extraction to Shipping Address section only
 4be3233 - fix: support alphanumeric street addresses (e.g., N58W23783 Hastings Ct)
 26b8237 - fix: support reverse name format and names with periods
