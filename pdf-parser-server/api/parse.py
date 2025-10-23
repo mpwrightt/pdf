@@ -151,11 +151,11 @@ class handler(BaseHTTPRequestHandler):
             #   - Street numbers: "123 Main St"
             #   - Alphanumeric: "N58W23783 Hastings Ct" (Wisconsin)
             #   - Hawaiian: "91-111 MAKAALOA PL" (hyphenated house numbers)
-            #   - PO BOX, CMR (military)
-            #   - HC (Highway Contract), RR (Rural Route)
-            # Support name formats: "First Last", "Last, First", "R. Jeremy" (initial with period)
+            #   - PO BOX: "PO BOX 123", "p.o. box 123", "P.O. BOX 123" (case-insensitive, optional periods)
+            #   - CMR (military), HC (Highway Contract), RR (Rural Route)
+            # Support name formats: "First Last", "Last, First", "R. Jeremy", "philip alston" (lowercase)
             # Address must have multiple tokens to avoid matching single order numbers or collector numbers
-            name_pattern = r'([A-Za-z][a-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+)\s*\n\s*(?:(?:[A-Za-z0-9\-]+[ \t]+[A-Za-z0-9 \t]+)|(?:PO[ \t]+BOX[ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \t]+Box[ \t]+\d+)|(?:HC[ \t]+\d+[ \t]+BOX[ \t]+[\w\-]+)|(?:RR[ \t]+\d+[ \t]+Box[ \t]+[\w\-]+))'
+            name_pattern = r'([A-Za-z][A-Za-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+)\s*\n\s*(?:(?:[A-Za-z0-9\-]+[ \t]+[A-Za-z0-9 \t]+)|(?:[Pp]\.?[Oo]\.?[ \t]+[Bb][Oo][Xx][ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \t]+Box[ \t]+\d+)|(?:HC[ \t]+\d+[ \t]+BOX[ \t]+[\w\-]+)|(?:RR[ \t]+\d+[ \t]+Box[ \t]+[\w\-]+))'
 
             matches = list(re.finditer(name_pattern, shipping_text))
 
