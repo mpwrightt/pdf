@@ -141,9 +141,9 @@ class handler(BaseHTTPRequestHandler):
         # Pattern: Look for person name (no newlines between parts!) followed by street address
         # Use [ \t] instead of \s to exclude newlines within the name
         # Allow both capitalized and lowercase names, including middle initials and hyphens
-        # Support various address formats: street numbers, PO BOX, CMR (military), etc.
+        # Support various address formats: street numbers, PO BOX, CMR (military), alphanumeric (e.g., N58W23783)
         # Support name formats: "First Last", "Last, First", "R. Jeremy" (initial with period)
-        name_pattern = r'([A-Za-z][a-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+)\s*\n\s*(?:(?:\d+[ \t]+[\w \t]+)|(?:PO[ \t]+BOX[ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \t]+Box[ \t]+\d+))'
+        name_pattern = r'([A-Za-z][a-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+)\s*\n\s*(?:(?:[A-Za-z0-9]+[ \t]+[\w \t]+)|(?:PO[ \t]+BOX[ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \t]+Box[ \t]+\d+))'
         
         matches = list(re.finditer(name_pattern, order_text))
         

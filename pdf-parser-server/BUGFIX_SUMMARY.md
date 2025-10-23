@@ -194,9 +194,43 @@ After:  (?:(?:\d+[ \t]+[\w \t]+)|(?:PO[ \t]+BOX[ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \
 
 ---
 
+## Issue 6: Buyer Names with Reverse Format and Periods
+**Commit:** `26b8237`
+**Date:** Oct 23, 2025 17:13
+
+### Problem
+Buyer names were not extracted when formatted in non-standard ways:
+- **Reverse format**: "Petteway, Nicholas" (Last, First instead of First Last)
+- **Initials with periods**: "R. Jeremy" (period after initial)
+
+### Root Cause
+Name regex pattern didn't allow:
+- Commas as separators between name parts
+- Periods after initials or name components
+
+### Solution
+Enhanced pattern to support commas and periods:
+```regex
+Before: [A-Za-z][a-z\-]*(?:[ \t]+[A-Za-z]\'?[A-Za-z\-]*)+
+After:  [A-Za-z][a-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+
+```
+
+Changes:
+- `\.?` allows optional period after each name part
+- `[ \t,]+` allows comma as separator (in addition to space/tab)
+
+### Examples Fixed
+- "Petteway, Nicholas" (reverse with comma) ✓
+- "R. Jeremy" (initial with period) ✓
+- "J. R. R. Tolkien" (multiple periods) ✓
+- All previous formats still work ✓
+
+---
+
 ## Commit History
 
 ```
+26b8237 - fix: support reverse name format and names with periods
 ffab6d2 - fix: support PO BOX and military addresses in buyer name extraction
 c2d3321 - fix: support hyphens in buyer names (e.g., Bau-Madsen)
 736385f - fix: support middle initials in buyer name extraction
