@@ -314,6 +314,58 @@ class handler(BaseHTTPRequestHandler):
                 'rarity': rarity.strip()
             })
 
+        # YGO back-link fallback: find 'YuGiOh - <Set>' lines, attach previous header-like '<Name> - #CODE - Rarity'
+        game_only_line = re.compile(r"^(?:\d+\s+)?(Magic|Pokemon|Yu-Gi-Oh|YuGiOh|Marvel's Spider-Man)\s+-\s+(.+)$")
+        header_like = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)$')
+        for i, line in enumerate(lines):
+            gm = game_only_line.match(line.strip())
+            if not gm:
+                continue
+            set_name = gm.group(2).strip()
+            # search up to 3 previous non-empty lines for header-like
+            hm = None
+            name = col = rarity = None
+            for back in range(1, 5):
+                j = i - back
+                if j < 0:
+                    break
+                prev = lines[j].strip()
+                if not prev:
+                    continue
+                mhead = header_like.match(prev)
+                if mhead:
+                    name, col, rarity = mhead.groups()
+                    hm = mhead
+                    break
+            if not hm:
+                continue
+            # try to get condition from immediate next hyphen-prefixed line
+            condition = ''
+            if i + 1 < len(lines):
+                n1 = lines[i+1].strip()
+                cont = re.match(r'^[\-–]\s+(.+)$', n1)
+                if cont:
+                    condition = cont.group(1).strip()
+            if not condition and i + 2 < len(lines):
+                n2 = lines[i+2].strip()
+                cont = re.match(r'^[\-–]\s+(.+)$', n2)
+                if cont:
+                    condition = cont.group(1).strip()
+            # clean set prefix if includes game token
+            set_name = re.sub(r"^[A-Za-z\-']+\s+-\s+", "", set_name).strip()
+            card_key = f"{name}|{col}|{condition}"
+            if card_key in seen_cards:
+                continue
+            seen_cards.add(card_key)
+            cards.append({
+                'name': name.strip(),
+                'quantity': 1,
+                'condition': condition.strip(),
+                'setName': set_name,
+                'collectorNumber': col.strip(),
+                'rarity': rarity.strip()
+            })
+
         # Pattern 9: Header line without quantity; next/prev line contains quantity and game-set
         # Example:
         #   Bitterblossom (Anime Borderless) (Confetti Foil) - #92 - M - Near Mint
