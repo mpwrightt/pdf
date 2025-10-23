@@ -243,7 +243,7 @@ class handler(BaseHTTPRequestHandler):
         card_no_game_no_hash = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
         game_set_line = re.compile(r"^(?:\d+\s+)?(Magic|Pokemon|Yu-Gi-Oh|YuGiOh|Marvel's Spider-Man)\s+-\s+(.+)$")
 
-        lines = order_text.split('\n')
+        lines = cleaned_lines
         for i, line in enumerate(lines):
             m = card_no_game.match(line)
             m2 = card_no_game_no_hash.match(line)
@@ -317,6 +317,8 @@ class handler(BaseHTTPRequestHandler):
         # YGO back-link fallback: find 'YuGiOh - <Set>' lines, attach previous header-like '<Name> - #CODE - Rarity'
         game_only_line = re.compile(r"^(?:\d+\s+)?(Magic|Pokemon|Yu-Gi-Oh|YuGiOh|Marvel's Spider-Man)\s+-\s+(.+)$")
         header_like = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)$')
+        header_fragment = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)-$')  # e.g., "... - #DOOD-"
+        code_continue = re.compile(r'^([A-Za-z0-9]+)\s*-\s*([A-Za-z ]+)(?:\s*-\s*(.+))?$')  # e.g., "EN085 - Common - Near Mint 1st Edition"
         for i, line in enumerate(lines):
             gm = game_only_line.match(line.strip())
             if not gm:
@@ -338,7 +340,40 @@ class handler(BaseHTTPRequestHandler):
                     hm = mhead
                     break
             if not hm:
-                continue
+                # Try to reconstruct split header: prev like "... - #DOOD-" and a following line like "EN085 - Common - ..."
+                name = col = rarity = None
+                for back in range(1, 6):
+                    j = i - back
+                    if j < 0:
+                        break
+                    prev = lines[j].strip()
+                    frag = header_fragment.match(prev)
+                    if not frag:
+                        continue
+                    name_part, code_prefix = frag.groups()  # code_prefix like DOOD-
+                    # search forward up to 4 lines for code continuation
+                    cont_text = ''
+                    cont_match = None
+                    for fwd in range(1, 6):
+                        k = i + fwd
+                        if k >= len(lines):
+                            break
+                        cont_text = lines[k].strip()
+                        cont_match = code_continue.match(cont_text)
+                        if cont_match:
+                            break
+                    if cont_match:
+                        code_suffix, rarity_word, maybe_cond = cont_match.groups()
+                        name = name_part
+                        col = f"{code_prefix}{code_suffix}".replace(' ', '')
+                        rarity = rarity_word
+                        # If condition continuation was embedded on the same line, capture it
+                        if maybe_cond:
+                            condition = (maybe_cond or '').strip()
+                        hm = True
+                        break
+                if not hm:
+                    continue
             # try to get condition from immediate next hyphen-prefixed line
             condition = ''
             if i + 1 < len(lines):
