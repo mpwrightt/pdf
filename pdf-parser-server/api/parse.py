@@ -432,7 +432,8 @@ class handler(BaseHTTPRequestHandler):
                     if cont_match:
                         code_suffix, rarity_word, maybe_cond = cont_match.groups()
                         name = name_part
-                        col = f"{code_prefix}{code_suffix}".replace(' ', '')
+                        # Ensure hyphen between prefix and suffix
+                        col = f"{code_prefix}-{code_suffix}".replace(' ', '').replace('--','-')
                         rarity = rarity_word
                         # If condition continuation was embedded on the same line, capture it
                         if maybe_cond:
