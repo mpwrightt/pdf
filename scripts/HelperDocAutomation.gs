@@ -58,12 +58,13 @@ const CONFIG = {
     RARITY: 8,         // Column I
     SET_NAME: 9,       // Column J
     CONDITION: 10,     // Column K
-    QUANTITY: 11       // Column L
+    QUANTITY: 11,      // Column L
   },
   COUNTER_KEYS: {
     SQ: 'helperdoc_total_sq_count',
     ROWS: 'helperdoc_total_row_count'
   }
+};
 
 /** Normalize collector number to comparable string (handle numbers and '123/456') */
 function normalizeCollector(num) {
@@ -72,7 +73,6 @@ function normalizeCollector(num) {
   if (!s) return '';
   return s; // keep as string, comparisons are string-based
 }
-};
 
 /**
  * Creates custom menu when spreadsheet opens
