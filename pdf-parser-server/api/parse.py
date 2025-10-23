@@ -241,7 +241,7 @@ class handler(BaseHTTPRequestHandler):
         # Pattern 8: Card line without game/set on same line; look at adjacent line for "<Game> - <Set>"
         card_no_game = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
         card_no_game_no_hash = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
-        game_set_line = re.compile(r"^(?:\d+\s+)?[A-Za-z\-']+\s+-\s+(.+)$")
+        game_set_line = re.compile(r"^(?:\d+\s+)?(Magic|Pokemon|Yu-Gi-Oh|YuGiOh|Marvel's Spider-Man)\s+-\s+(.+)$")
 
         lines = order_text.split('\n')
         for i, line in enumerate(lines):
@@ -255,11 +255,11 @@ class handler(BaseHTTPRequestHandler):
             if i-1 >= 0:
                 gs = game_set_line.match(lines[i-1].strip())
                 if gs:
-                    set_name = gs.group(1).strip()
+                    set_name = gs.group(2).strip()
             if not set_name and i+1 < len(lines):
                 gs = game_set_line.match(lines[i+1].strip())
                 if gs:
-                    set_name = gs.group(1).strip()
+                    set_name = gs.group(2).strip()
             # If the 'col' token looks like a rarity (e.g., 'U', 'C', 'R', 'M', 'Common', 'Uncommon', etc.),
             # then this line likely has NO collector number and the trailing token is actually the set name.
             rarity_alias = {
@@ -361,7 +361,7 @@ class handler(BaseHTTPRequestHandler):
                 nxt = lines[i+1].strip()
                 m_slot = re.match(r"^[A-Z](?:-[A-Z])?\s+(\d+)\s+[A-Za-z\-']+\s+-\s+(.+)$", nxt)
                 m_simple = re.match(r"^(\d+)\s+[A-Za-z\-']+\s+-\s+(.+)$", nxt)
-                m_game = re.match(r"^[A-Za-z\-']+\s+-\s+(.+)$", nxt)
+                m_game = re.match(r"^(Magic|Pokemon|Yu-Gi-Oh|YuGiOh|Marvel's Spider-Man)\s+-\s+(.+)$", nxt)
                 if m_slot:
                     qty = int(m_slot.group(1))
                     set_name = m_slot.group(2).strip()
@@ -369,7 +369,7 @@ class handler(BaseHTTPRequestHandler):
                     qty = int(m_simple.group(1))
                     set_name = m_simple.group(2).strip()
                 elif m_game:
-                    set_name = m_game.group(1).strip()
+                    set_name = m_game.group(2).strip()
             # Merge trailing 'Foil' line into condition if present
             if i+2 < len(lines):
                 nxt2 = lines[i+2].strip()

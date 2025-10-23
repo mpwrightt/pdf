@@ -71,6 +71,8 @@ const CONFIG = {
 function normalizeCollector(num) {
   if (num === null || num === undefined) return '';
   let s = String(num).trim().toUpperCase().replace(/\s+/g, ' ');
+  // Drop leading '#'
+  if (s.startsWith('#')) s = s.slice(1);
   if (!s) return '';
   // Pure numeric -> drop leading zeros
   if (/^\d+$/.test(s)) {
