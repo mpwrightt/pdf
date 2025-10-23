@@ -147,10 +147,15 @@ class handler(BaseHTTPRequestHandler):
             # Pattern: Look for person name (no newlines between parts!) followed by street address
             # Use [ \t] instead of \s to exclude newlines within the name
             # Allow both capitalized and lowercase names, including middle initials and hyphens
-            # Support various address formats: street numbers, PO BOX, CMR (military), alphanumeric (e.g., N58W23783)
+            # Support various address formats:
+            #   - Street numbers: "123 Main St"
+            #   - Alphanumeric: "N58W23783 Hastings Ct" (Wisconsin)
+            #   - Hawaiian: "91-111 MAKAALOA PL" (hyphenated house numbers)
+            #   - PO BOX, CMR (military)
+            #   - HC (Highway Contract), RR (Rural Route)
             # Support name formats: "First Last", "Last, First", "R. Jeremy" (initial with period)
             # Address must have multiple tokens to avoid matching single order numbers or collector numbers
-            name_pattern = r'([A-Za-z][a-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+)\s*\n\s*(?:(?:[A-Za-z0-9]+[ \t]+[A-Za-z0-9 \t]+)|(?:PO[ \t]+BOX[ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \t]+Box[ \t]+\d+))'
+            name_pattern = r'([A-Za-z][a-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+)\s*\n\s*(?:(?:[A-Za-z0-9\-]+[ \t]+[A-Za-z0-9 \t]+)|(?:PO[ \t]+BOX[ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \t]+Box[ \t]+\d+)|(?:HC[ \t]+\d+[ \t]+BOX[ \t]+[\w\-]+)|(?:RR[ \t]+\d+[ \t]+Box[ \t]+[\w\-]+))'
 
             matches = list(re.finditer(name_pattern, shipping_text))
 
