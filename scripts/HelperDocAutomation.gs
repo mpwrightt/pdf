@@ -304,13 +304,14 @@ function pullUnclaimedItems() {
     
     // Write to sheet starting at row 3, column J (10th column)
     currentSheet.getRange(3, 10, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
-    
-    ui.alert(
+
+    // Toast notification instead of modal
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `Pulled ${itemsForSQ.length} items for SQ: ${selectedSQ}. ${uniqueSQs.length} total unclaimed SQs remaining.`,
       'Items Loaded',
-      `Pulled ${itemsForSQ.length} items for SQ: ${selectedSQ}\n\n${uniqueSQs.length} total unclaimed SQs remaining.\n\nNext: Upload the PDF for this SQ.`,
-      ui.ButtonSet.OK
+      5
     );
-    
+
   } catch (error) {
     Logger.log('Error in pullUnclaimedItems: ' + error.toString());
     ui.alert('Error', 'Failed to pull items: ' + error.message, ui.ButtonSet.OK);
@@ -745,12 +746,17 @@ function sendToRefundLog() {
     
     // Write to Refund Log
     writeToRefundLog(completedItems);
-    
+
     incrementCounters(1, completedItems.length);
     const counters = getCounters();
-    ui.alert('Success', `${completedItems.length} items sent to Refund Log!\nTotals so far: ${counters.sq} SQ(s), ${counters.rows} row(s).`, ui.ButtonSet.OK);
-    SpreadsheetApp.getActiveSpreadsheet().toast(`Totals — SQs: ${counters.sq} | Rows: ${counters.rows}`, 'Counters', 5);
-    
+
+    // Toast notification instead of modal
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `✓ ${completedItems.length} items sent to Refund Log! Totals: ${counters.sq} SQ(s), ${counters.rows} row(s)`,
+      'Success',
+      5
+    );
+
   } catch (error) {
     Logger.log('Error in sendToRefundLog: ' + error.toString());
     ui.alert('Error', 'Failed to send to Refund Log: ' + error.message, ui.ButtonSet.OK);
@@ -798,20 +804,14 @@ function writeToRefundLog(items) {
  * Clear Helper Sheet
  */
 function clearHelperSheet() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.alert(
-    'Clear Sheet',
-    'Clear all data from Helper Sheet?',
-    ui.ButtonSet.YES_NO
-  );
-  
-  if (response === ui.Button.YES) {
-    const sheet = SpreadsheetApp.getActiveSheet();
-    const lastRow = sheet.getLastRow();
-    if (lastRow > 2) {
-      sheet.getRange(3, 1, lastRow - 2, sheet.getLastColumn()).clearContent();
-    }
-    ui.alert('Cleared', 'Helper sheet cleared.', ui.ButtonSet.OK);
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow > 2) {
+    sheet.getRange(3, 1, lastRow - 2, sheet.getLastColumn()).clearContent();
+    SpreadsheetApp.getActiveSpreadsheet().toast('Helper sheet cleared', 'Cleared', 3);
+  } else {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Sheet already empty', 'Cleared', 3);
   }
 }
 
