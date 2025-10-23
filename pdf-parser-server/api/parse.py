@@ -681,6 +681,13 @@ class handler(BaseHTTPRequestHandler):
         #   Lightly Played Foil
         # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
         pattern_split_no_cond = r'^(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s*$'
+
+        # Pattern 5b: Split case with partial condition on first line (e.g., ends with 'Near')
+        # Example:
+        #   Treasure // Plot Double-Sided Token - #18 // 20 - T - Near
+        #   Bin 1 1 Magic - Outlaws of Thunder Junction
+        #   Mint
+        pattern_split_partial_cond = r'^(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+)$'
         for match in re.finditer(pattern_split_no_cond, order_text, re.MULTILINE):
             match_end = match.end()
             next_line_start = match_end + 1
@@ -706,6 +713,42 @@ class handler(BaseHTTPRequestHandler):
                         'name': match.group(1).strip(),
                         'quantity': int(bin_match.group(1)),
                         'condition': full_condition.strip(),
+                        'setName': bin_match.group(2).strip(),
+                        'collectorNumber': match.group(2).strip(),
+                        'rarity': match.group(3).strip()
+                    })
+
+        # Process Pattern 5b: partial condition on first line
+        for match in re.finditer(pattern_split_partial_cond, order_text, re.MULTILINE):
+            match_end = match.end()
+            next_line_start = match_end + 1
+            next_line_end = order_text.find('\n', next_line_start)
+            if next_line_end == -1:
+                next_line_end = len(order_text)
+            next_line = order_text[next_line_start:next_line_end].strip()
+
+            bin_match = re.match(r'Bin\s+[\w\-]+\s+(\d+)\s+[A-Za-z\-\']+\s+-\s+(.+)', next_line)
+            if bin_match:
+                # Partial condition from first line (e.g., "Near")
+                condition_part1 = match.group(4).strip()
+
+                # Third line should have the rest (e.g., "Mint")
+                third_line_start = next_line_end + 1
+                third_line_end = order_text.find('\n', third_line_start)
+                if third_line_end == -1:
+                    third_line_end = len(order_text)
+                third_line = order_text[third_line_start:third_line_end].strip()
+
+                # Combine condition parts
+                full_condition = f"{condition_part1} {third_line}".strip() if third_line and not third_line.startswith('Bin') else condition_part1
+
+                card_key = f"{match.group(1)}|{match.group(2)}|{full_condition}"
+                if card_key not in seen_cards:
+                    seen_cards.add(card_key)
+                    cards.append({
+                        'name': match.group(1).strip(),
+                        'quantity': int(bin_match.group(1)),
+                        'condition': full_condition,
                         'setName': bin_match.group(2).strip(),
                         'collectorNumber': match.group(2).strip(),
                         'rarity': match.group(3).strip()
