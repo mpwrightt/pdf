@@ -321,12 +321,18 @@ class handler(BaseHTTPRequestHandler):
         #   Foil
         header_no_qty = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
         header_no_qty_no_hash = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        header_minimal = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s#([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)$')
         for i, line in enumerate(lines):
             m = header_no_qty.match(line)
             m2 = header_no_qty_no_hash.match(line)
-            if not m and not m2:
+            m3 = header_minimal.match(line)
+            if not m and not m2 and not m3:
                 continue
-            name, col, rarity, condition = (m.groups() if m else m2.groups())
+            if m or m2:
+                name, col, rarity, condition = (m.groups() if m else m2.groups())
+            else:
+                name, col, rarity = m3.groups()
+                condition = ''
             qty = 1
             set_name = ''
 
@@ -370,9 +376,13 @@ class handler(BaseHTTPRequestHandler):
                     set_name = m_simple.group(2).strip()
                 elif m_game:
                     set_name = m_game.group(2).strip()
-            # Merge trailing 'Foil' line into condition if present
+            # Merge trailing condition continuation line (e.g., '- Near Mint 1st Edition') and 'Foil' if present
             if i+2 < len(lines):
                 nxt2 = lines[i+2].strip()
+                # condition continuation like '- Near Mint 1st Edition'
+                cont = re.match(r'^[\-–]\s+(.+)$', nxt2)
+                if cont and not condition:
+                    condition = cont.group(1).strip()
                 if nxt2.lower() == 'foil' and 'foil' not in condition.lower():
                     condition = (condition + ' Foil').strip()
                 # If set_name looks truncated and next token is a short word continuation (e.g., 'Tales'), append it
