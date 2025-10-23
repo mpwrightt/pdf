@@ -49,17 +49,29 @@ const CONFIG = {
   },
   
   REFUND_COLS: {
-    ORDER_NUMBER: 3,   // Column D
-    BUYER_NAME: 4,     // Column E
-    SQ_NUMBER: 5,      // Column F
-    GAME: 6,           // Column G
-    CARD_NAME: 7,      // Column H (Card Name)
-    CARD_NUM: 8,       // Column I (Card #)
-    RARITY: 9,         // Column J
-    SET_NAME: 10,      // Column K
-    CONDITION: 11,     // Column L
-    QUANTITY: 12       // Column M
+    ORDER_NUMBER: 2,   // Column C
+    BUYER_NAME: 3,     // Column D
+    SQ_NUMBER: 4,      // Column E
+    GAME: 5,           // Column F
+    CARD_NAME: 6,      // Column G (Card Name)
+    CARD_NUM: 7,       // Column H (Card #)
+    RARITY: 8,         // Column I
+    SET_NAME: 9,       // Column J
+    CONDITION: 10,     // Column K
+    QUANTITY: 11       // Column L
+  },
+  COUNTER_KEYS: {
+    SQ: 'helperdoc_total_sq_count',
+    ROWS: 'helperdoc_total_row_count'
   }
+
+/** Normalize collector number to comparable string (handle numbers and '123/456') */
+function normalizeCollector(num) {
+  if (num === null || num === undefined) return '';
+  const s = String(num).trim();
+  if (!s) return '';
+  return s; // keep as string, comparisons are string-based
+}
 };
 
 /**
@@ -74,6 +86,8 @@ function onOpen() {
     .addItem('2️⃣ Upload SQ PDF', 'showUploadDialog')
     .addSeparator()
     .addItem('3️⃣ Send to Refund Log', 'sendToRefundLog')
+    .addSeparator()
+    .addItem('🧮 Reset Counters', 'resetCounters')
     .addSeparator()
     .addItem('🗑️ Clear Helper Sheet', 'clearHelperSheet')
     .addToUi();
@@ -169,6 +183,7 @@ function pullUnclaimedItems() {
         // All criteria met!
         Logger.log(`✓ Found unclaimed item at row ${i}: ${sqNumber}`);
         unclaimedItems.push({
+          rowIndex: i + 1, // 1-based row index in Discrepancy Log
           sqNumber: row[CONFIG.DISCREP_COLS.SQ_NUMBER],
           cardName: row[CONFIG.DISCREP_COLS.CARD_NAME],
           collectorNum: row[CONFIG.DISCREP_COLS.COLLECTOR_NUM],
@@ -222,6 +237,22 @@ function pullUnclaimedItems() {
     if (itemsForSQ.length === 0) {
       ui.alert('Not Found', `No items found for SQ: ${selectedSQ}`, ui.ButtonSet.OK);
       return;
+    }
+    
+    // Claim the selected items in the Discrepancy Log: set Initials = 'BOT', Resolution Type = 'Missing Note', and Solve Date = today
+    try {
+      const now = new Date();
+      let claimed = 0;
+      for (const item of itemsForSQ) {
+        // Initials (O), Resolution Type (P), and Solve Date (R)
+        discrepSheet.getRange(item.rowIndex, CONFIG.DISCREP_COLS.INITIALS + 1).setValue('BOT');
+        discrepSheet.getRange(item.rowIndex, CONFIG.DISCREP_COLS.RESOLUTION_TYPE + 1).setValue('Missing Note');
+        discrepSheet.getRange(item.rowIndex, CONFIG.DISCREP_COLS.SOLVE_DATE + 1).setValue(now);
+        claimed++;
+      }
+      Logger.log(`Claimed ${claimed} row(s) in Discrepancy Log for SQ ${selectedSQ} (Initials='BOT', Resolution='Missing Note', Solve Date=${now.toDateString()}).`);
+    } catch (e) {
+      Logger.log(`WARNING: Failed to claim items for SQ ${selectedSQ}: ${e}`);
     }
     
     // Write to current sheet (Helper Doc)
@@ -311,8 +342,7 @@ function showUploadDialog() {
       }
       
       function onSuccess(result) {
-        showStatus('PDF processed successfully! Found ' + result.orderCount + ' orders. Ready to send to Refund Log.', 'success');
-        setTimeout(() => google.script.host.close(), 3000);
+        google.script.host.close();
       }
       
       function onError(error) {
@@ -433,6 +463,7 @@ function fillOrderInfo(parsedOrders) {
     const cardName = row[CONFIG.HELPER_COLS.CARD_NAME];
     const setName = row[CONFIG.HELPER_COLS.SET_NAME];
     const condition = row[CONFIG.HELPER_COLS.CONDITION];
+    const collectorNum = row[CONFIG.HELPER_COLS.COLLECTOR_NUM];
     
     if (!cardName) continue; // Skip empty rows
     
@@ -446,7 +477,7 @@ function fillOrderInfo(parsedOrders) {
     }
 
     // Find matching order
-    const matchedOrder = findMatchingOrder(cardName, setName, condition, parsedOrders);
+    const matchedOrder = findMatchingOrder(cardName, setName, condition, collectorNum, parsedOrders);
     
     if (matchedOrder) {
       // Fill in Order Number and Buyer Name (columns H and I, indices 7 and 8)
@@ -480,27 +511,56 @@ function normalizeCondition(condition) {
 }
 
 /**
- * Find matching order for a card
+ * Name normalization helpers for robust comparisons
  */
-function findMatchingOrder(cardName, setName, condition, orders) {
-  // Normalize by removing newlines, extra spaces, and spaces around punctuation
-  const normalizedCardName = cardName
-    .replace(/\s*\n\s*/g, ' ')  // Replace newlines with space
-    .replace(/\s+/g, ' ')        // Collapse multiple spaces to one
-    .replace(/\s*,\s*/g, ',')    // Remove spaces around commas
+function normalizeNameExact(name) {
+  return (name || '')
+    .replace(/\s*\n\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ',')
     .toLowerCase()
     .trim();
+}
+
+function stripParentheticals(name) {
+  return (name || '').replace(/\s*\([^\)]*\)/g, '').trim();
+}
+
+function normalizeNameLoose(name) {
+  // Remove parentheticals, punctuation, collapse spaces
+  const noParens = stripParentheticals(name);
+  return noParens
+    .replace(/\s*\n\s*/g, ' ')
+    .replace(/[\-–—]/g, ' ') // hyphen variations to space
+    .replace(/[^a-zA-Z0-9\s,]/g, '') // strip punctuation except commas
+    .replace(/\s*,\s*/g, ',')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Find matching order for a card
+ */
+function findMatchingOrder(cardName, setName, condition, collectorNum, orders) {
+  // Normalize names (exact / base / loose) for robust matching
+  const normalizedCardName = normalizeNameExact(cardName);
+  const baseCardName = normalizeNameExact(stripParentheticals(cardName));
+  const looseCardName = normalizeNameLoose(cardName);
   const normalizedSetName = setName.toLowerCase().trim();
   const normalizedCondition = normalizeCondition(condition);
+  const normalizedCollector = normalizeCollector(collectorNum);
   
+  // Fallback candidate if only condition differs
+  let weakCandidate = null;
+  // Collector-number-based fallback
+  let collectorCandidate = null;
+
   for (const order of orders) {
     for (const card of order.cards) {
-      const cardNameNormalized = card.name
-        .replace(/\s*\n\s*/g, ' ')
-        .replace(/\s+/g, ' ')
-        .replace(/\s*,\s*/g, ',')
-        .toLowerCase()
-        .trim();
+      const cardNameNormalized = normalizeNameExact(card.name);
+      const cardNameBase = normalizeNameExact(stripParentheticals(card.name));
+      const cardNameLoose = normalizeNameLoose(card.name);
       
       // Debug logging for Emblem card
       if (normalizedCardName.includes('emblem') && normalizedCardName.includes('liliana')) {
@@ -513,8 +573,19 @@ function findMatchingOrder(cardName, setName, condition, orders) {
           Logger.log(`  DEBUG: Condition: ${normalizeCondition(card.condition)} vs ${normalizedCondition}`);
         }
       }
+      // Debug logging for Hakbal case
+      if (normalizedCardName.includes('hakbal') && normalizedCardName.includes('surging')) {
+        if (cardNameNormalized.includes('hakbal')) {
+          Logger.log(`  DEBUG: Hakbal PDF: name=${card.name}, set=${card.setName}, cond=${card.condition}, col=${card.collectorNumber}`);
+        }
+      }
       
-      const matchesName = cardNameNormalized === normalizedCardName;
+      // Name can match by exact, base-without-parentheticals, or loose (punctuation-insensitive)
+      const matchesName = (
+        cardNameNormalized === normalizedCardName ||
+        cardNameBase === baseCardName ||
+        cardNameLoose === looseCardName
+      );
       const matchesSet = card.setName.toLowerCase().includes(normalizedSetName) || 
                          normalizedSetName.includes(card.setName.toLowerCase());
       const matchesCondition = normalizeCondition(card.condition) === normalizedCondition;
@@ -525,9 +596,43 @@ function findMatchingOrder(cardName, setName, condition, orders) {
           buyerName: order.buyerName
         };
       }
+
+      // Capture fallback if only condition differs
+      if (!matchesCondition && matchesName && matchesSet && weakCandidate === null) {
+        weakCandidate = {
+          orderNumber: order.orderNumber,
+          buyerName: order.buyerName,
+          pdfCondition: normalizeCondition(card.condition),
+          csvCondition: normalizedCondition,
+          pdfName: card.name,
+          pdfSet: card.setName
+        };
+      }
+
+      // Capture collector-number-based fallback if set matches and collector matches
+      const pdfCollector = normalizeCollector(card.collectorNumber);
+      if (!collectorCandidate && normalizedCollector && pdfCollector && normalizedCollector === pdfCollector && matchesSet) {
+        collectorCandidate = {
+          orderNumber: order.orderNumber,
+          buyerName: order.buyerName,
+          pdfName: card.name,
+          pdfSet: card.setName,
+          pdfCondition: normalizeCondition(card.condition)
+        };
+      }
     }
   }
   
+  if (weakCandidate) {
+    Logger.log(`  INFO: Using fallback match (condition differs): PDF=${weakCandidate.pdfCondition}, CSV=${weakCandidate.csvCondition}`);
+    return { orderNumber: weakCandidate.orderNumber, buyerName: weakCandidate.buyerName };
+  }
+
+  if (collectorCandidate) {
+    Logger.log(`  INFO: Using collector# fallback: PDF name=${collectorCandidate.pdfName}, set=${collectorCandidate.pdfSet}, cond=${collectorCandidate.pdfCondition}`);
+    return { orderNumber: collectorCandidate.orderNumber, buyerName: collectorCandidate.buyerName };
+  }
+
   return null;
 }
 
@@ -570,21 +675,13 @@ function sendToRefundLog() {
       return;
     }
     
-    // Confirm
-    const response = ui.alert(
-      'Send to Refund Log',
-      `Send ${completedItems.length} items to Refund Log?`,
-      ui.ButtonSet.YES_NO
-    );
-    
-    if (response !== ui.Button.YES) {
-      return;
-    }
-    
     // Write to Refund Log
     writeToRefundLog(completedItems);
     
-    ui.alert('Success', `${completedItems.length} items sent to Refund Log!`, ui.ButtonSet.OK);
+    incrementCounters(1, completedItems.length);
+    const counters = getCounters();
+    ui.alert('Success', `${completedItems.length} items sent to Refund Log!\nTotals so far: ${counters.sq} SQ(s), ${counters.rows} row(s).`, ui.ButtonSet.OK);
+    ui.toast(`Totals — SQs: ${counters.sq} | Rows: ${counters.rows}`, 'Counters', 5);
     
   } catch (error) {
     Logger.log('Error in sendToRefundLog: ' + error.toString());
@@ -606,6 +703,8 @@ function writeToRefundLog(items) {
   // Prepare rows
   const rowsToWrite = items.map(item => {
     const row = Array(CONFIG.REFUND_COLS.QUANTITY + 1).fill('');
+    // Column A: today's date
+    row[0] = new Date();
     
     row[CONFIG.REFUND_COLS.ORDER_NUMBER] = item.orderNumber;
     row[CONFIG.REFUND_COLS.BUYER_NAME] = item.buyerName;
@@ -623,6 +722,8 @@ function writeToRefundLog(items) {
   
   // Write to sheet
   refundSheet.getRange(nextRow, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
+  // Ensure column A displays as date
+  refundSheet.getRange(nextRow, 1, rowsToWrite.length, 1).setNumberFormat('m/d/yyyy');
 }
 
 /**
