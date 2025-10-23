@@ -182,7 +182,8 @@ class handler(BaseHTTPRequestHandler):
         order_text = '\n'.join(cleaned_lines)
         
         # Pattern 1: With "Bin X" prefix - handles multiline set names
-        pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
+        pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_bin, order_text, re.MULTILINE):
             # Get the line after this match to check for set name continuation
@@ -222,7 +223,8 @@ class handler(BaseHTTPRequestHandler):
         # Pattern 2: Standard format (no Bin prefix)
         # Matches: "1 CardName - #123 - R - Condition <Game> - Set" (Game can be Magic, Pokemon, etc.)
         # Allow game tokens with hyphens/apostrophes (e.g., Yu-Gi-Oh, Marvel's)
-        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
+        # Updated to handle double-sided cards with '//' in name and collector number (e.g., "Treasure // Plot" with "#18 // 20")
+        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_standard, order_text, re.MULTILINE):
             condition = match.group(5).strip()
@@ -239,8 +241,9 @@ class handler(BaseHTTPRequestHandler):
                 })
 
         # Pattern 8: Card line without game/set on same line; look at adjacent line for "<Game> - <Set>"
-        card_no_game = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
-        card_no_game_no_hash = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
+        card_no_game = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        card_no_game_no_hash = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
         game_set_line = re.compile(r"^(?:\d+\s+)?(Magic|Pokemon|Yu-Gi-Oh|YuGiOh|Marvel's Spider-Man)\s+-\s+(.+)$")
 
         lines = cleaned_lines
@@ -315,9 +318,10 @@ class handler(BaseHTTPRequestHandler):
             })
 
         # Final robust fallback: stitch header-like lines to following game-set and condition lines (handles split or minimal headers)
-        header_like_any = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)(?:\s*-\s*.*)?$')
-        header_fragment = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)-$')
-        code_continue = re.compile(r'^([A-Za-z0-9]+)\s*-\s*([A-Za-z ]+)(?:\s*-\s*(.+))?$')
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
+        header_like_any = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)(?:\s*-\s*.*)?$')
+        header_fragment = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\-\s]+)-$')
+        code_continue = re.compile(r'^([A-Za-z0-9/\s]+)\s*-\s*([A-Za-z ]+)(?:\s*-\s*(.+))?$')
         for i, line in enumerate(lines):
             hm = header_like_any.match(line.strip())
             name = col = rarity = None
@@ -382,10 +386,11 @@ class handler(BaseHTTPRequestHandler):
             })
 
         # YGO back-link fallback: find 'YuGiOh - <Set>' lines, attach previous header-like '<Name> - #CODE - Rarity'
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
         game_only_line = re.compile(r"^(?:\d+\s+)?(Magic|Pokemon|Yu-Gi-Oh|YuGiOh|Marvel's Spider-Man)\s+-\s+(.+)$")
-        header_like = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)$')
-        header_fragment = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)-$')  # e.g., "... - #DOOD-"
-        code_continue = re.compile(r'^([A-Za-z0-9]+)\s*-\s*([A-Za-z ]+)(?:\s*-\s*(.+))?$')  # e.g., "EN085 - Common - Near Mint 1st Edition"
+        header_like = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)$')
+        header_fragment = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\-\s]+)-$')  # e.g., "... - #DOOD-"
+        code_continue = re.compile(r'^([A-Za-z0-9/\s]+)\s*-\s*([A-Za-z ]+)(?:\s*-\s*(.+))?$')  # e.g., "EN085 - Common - Near Mint 1st Edition"
         for i, line in enumerate(lines):
             gm = game_only_line.match(line.strip())
             if not gm:
@@ -474,9 +479,10 @@ class handler(BaseHTTPRequestHandler):
         #   Bitterblossom (Anime Borderless) (Confetti Foil) - #92 - M - Near Mint
         #   M-T 1 Magic - Wilds of Eldraine: Enchanting Tales
         #   Foil
-        header_no_qty = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
-        header_no_qty_no_hash = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
-        header_minimal = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s#([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)$')
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
+        header_no_qty = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        header_no_qty_no_hash = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        header_minimal = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)$')
         for i, line in enumerate(lines):
             m = header_no_qty.match(line)
             m2 = header_no_qty_no_hash.match(line)
@@ -626,7 +632,8 @@ class handler(BaseHTTPRequestHandler):
         # Pattern 4: Extreme split case (card name on one line, Bin+qty on next)
         # Handles cases where condition might be split across 3 lines
         # Use a broad name matcher to include apostrophes and punctuation; allow collector numbers with slashes
-        pattern_split = r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z ]+)$'
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
+        pattern_split = r'^(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z ]+)$'
         
         for match in re.finditer(pattern_split, order_text, re.MULTILINE):
             match_end = match.end()
@@ -672,7 +679,8 @@ class handler(BaseHTTPRequestHandler):
         #   Mondrak, Glory Dominus (Oil Slick Raised Foil) - #346 - M -
         #   Bin 8-T 1 Magic - Phyrexia: All Will Be One
         #   Lightly Played Foil
-        pattern_split_no_cond = r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s*$'
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
+        pattern_split_no_cond = r'^(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s*$'
         for match in re.finditer(pattern_split_no_cond, order_text, re.MULTILINE):
             match_end = match.end()
             next_line_start = match_end + 1
@@ -708,14 +716,17 @@ class handler(BaseHTTPRequestHandler):
         #   Hakbal ... - #19 - M - Lightly Magic - Commander: The Lost Caverns of
         #   Bin 8 1
         #   Played Foil Ixalan
-        pattern_split_bin_simple = r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z]+)\s+[A-Za-z\-\']+\s+-\s+(.+)$'
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
+        pattern_split_bin_simple = r'^(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z]+)\s+[A-Za-z\-\']+\s+-\s+(.+)$'
 
         # Pattern 7: Slot-letter prefix quantity (e.g., "X 1 Pikachu ... - #027/078 - Common - Near Mint Pokemon - Pokemon GO")
-        pattern_slotqty = r'^[A-Z](?:-[A-Z])?\s+(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
-        pattern_slotqty_no_hash = r'^[A-Z](?:-[A-Z])?\s+(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
+        pattern_slotqty = r'^[A-Z](?:-[A-Z])?\s+(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
+        pattern_slotqty_no_hash = r'^[A-Z](?:-[A-Z])?\s+(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
 
         # Pattern 2b: Standard format without '#' before collector number (e.g., "1 Ditto - 132/165 - Rare - Near Mint Pokemon - Deck Exclusives")
-        pattern_standard_no_hash = r'^(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
+        # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
+        pattern_standard_no_hash = r'^(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
         condition_tokens_whitelist = {
             'near', 'mint', 'lightly', 'played', 'moderately', 'heavily', 'damaged', 'foil',
             'nm', 'lp', 'mp', 'hp', 'nif', 'lpf', 'mpf', 'nmf', 'good', 'excellent', 'poor',
