@@ -227,9 +227,40 @@ Changes:
 
 ---
 
+## Issue 7: Buyer Names with Alphanumeric Street Addresses
+**Commit:** `4be3233`
+**Date:** Oct 23, 2025 17:30
+
+### Problem
+Buyer names were not extracted when the street address started with alphanumeric characters instead of just digits.
+
+Example address: "N58W23783 Hastings Ct" (Wisconsin-style address with directional prefix)
+
+### Root Cause
+Name regex pattern required addresses to start with a digit (`\d+`). Wisconsin-style addresses use directional prefixes (N=North, S=South, E=East, W=West) followed by coordinates.
+
+### Solution
+Broadened address pattern to accept any alphanumeric start:
+```regex
+Before: \d+[ \t]+[\w \t]+
+After:  [A-Za-z0-9]+[ \t]+[\w \t]+
+```
+
+This change allows:
+- Traditional numeric: "123 Main St"
+- Alphanumeric: "N58W23783 Hastings Ct"
+
+### Examples Fixed
+- "Ryan Nelsen-Freund" with "N58W23783 Hastings Ct" ✓
+- Order: 251013-9BDB ✓
+- All previous address formats still work ✓
+
+---
+
 ## Commit History
 
 ```
+4be3233 - fix: support alphanumeric street addresses (e.g., N58W23783 Hastings Ct)
 26b8237 - fix: support reverse name format and names with periods
 ffab6d2 - fix: support PO BOX and military addresses in buyer name extraction
 c2d3321 - fix: support hyphens in buyer names (e.g., Bau-Madsen)
@@ -257,8 +288,15 @@ c84c6b8 - fix: handle double-sided cards with spaces in collector numbers
 
 ## Success Metrics
 
-- ✅ 100% success rate on 3 test PDFs (251013-264rmb, 251013-340rpc, 251014-034rme)
+- ✅ 100% success rate on 7+ test PDFs (251013-264rmb, 251013-340rpc, 251014-034rme, 251014-042rme, 251014-049rmb, 251014-050rmb)
 - ✅ Handles double-sided cards with space-separated collector numbers
-- ✅ Extracts buyer names with middle initials and hyphens
+- ✅ Extracts buyer names with all format variations:
+  - Middle initials (Brendan E White)
+  - Hyphens (Emily Bau-Madsen, Ryan Nelsen-Freund)
+  - Reverse format (Petteway, Nicholas)
+  - Periods (R. Jeremy)
+  - PO BOX addresses
+  - Military CMR addresses
+  - Alphanumeric street addresses (N58W23783 Hastings Ct)
 - ✅ Properly combines split condition text across multiple lines
 - ✅ No regression on previously working PDFs
