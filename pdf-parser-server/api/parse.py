@@ -135,28 +135,35 @@ class handler(BaseHTTPRequestHandler):
         """Extract billing person name from order section"""
         exclude_names = [
             'Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged',
-            'Billing Address', 'Shipping Address', 'Order Date', 'Direct by TCGplayer'
+            'Billing Address', 'Shipping Address', 'Order Date', 'Direct by TCGplayer',
+            'Included Orders', 'Seller Name', 'Order Number'
         ]
-        
-        # Pattern: Look for person name (no newlines between parts!) followed by street address
-        # Use [ \t] instead of \s to exclude newlines within the name
-        # Allow both capitalized and lowercase names, including middle initials and hyphens
-        # Support various address formats: street numbers, PO BOX, CMR (military), alphanumeric (e.g., N58W23783)
-        # Support name formats: "First Last", "Last, First", "R. Jeremy" (initial with period)
-        name_pattern = r'([A-Za-z][a-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+)\s*\n\s*(?:(?:[A-Za-z0-9]+[ \t]+[\w \t]+)|(?:PO[ \t]+BOX[ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \t]+Box[ \t]+\d+))'
-        
-        matches = list(re.finditer(name_pattern, order_text))
-        
-        # Get the last match (billing person, not shipping recipient)
-        for match in reversed(matches):
-            candidate_name = match.group(1).strip()
-            
-            # Skip if it contains excluded words
-            if any(excluded in candidate_name for excluded in exclude_names):
-                continue
-            
-            return candidate_name
-        
+
+        # First try to extract from the explicit "Shipping Address" section
+        shipping_section = re.search(r'Shipping Address\s*\n(.*?)Shipping Method:', order_text, re.DOTALL)
+        if shipping_section:
+            shipping_text = shipping_section.group(1)
+
+            # Pattern: Look for person name (no newlines between parts!) followed by street address
+            # Use [ \t] instead of \s to exclude newlines within the name
+            # Allow both capitalized and lowercase names, including middle initials and hyphens
+            # Support various address formats: street numbers, PO BOX, CMR (military), alphanumeric (e.g., N58W23783)
+            # Support name formats: "First Last", "Last, First", "R. Jeremy" (initial with period)
+            # Address must have multiple tokens to avoid matching single order numbers or collector numbers
+            name_pattern = r'([A-Za-z][a-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+)\s*\n\s*(?:(?:[A-Za-z0-9]+[ \t]+[A-Za-z0-9 \t]+)|(?:PO[ \t]+BOX[ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \t]+Box[ \t]+\d+))'
+
+            matches = list(re.finditer(name_pattern, shipping_text))
+
+            # Get the first match in shipping address (should be the recipient name)
+            for match in matches:
+                candidate_name = match.group(1).strip()
+
+                # Skip if it contains excluded words
+                if any(excluded in candidate_name for excluded in exclude_names):
+                    continue
+
+                return candidate_name
+
         return None
     
     def extract_cards(self, order_text):
