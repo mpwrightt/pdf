@@ -314,6 +314,73 @@ class handler(BaseHTTPRequestHandler):
                 'rarity': rarity.strip()
             })
 
+        # Final robust fallback: stitch header-like lines to following game-set and condition lines (handles split or minimal headers)
+        header_like_any = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)(?:\s*-\s*.*)?$')
+        header_fragment = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)-$')
+        code_continue = re.compile(r'^([A-Za-z0-9]+)\s*-\s*([A-Za-z ]+)(?:\s*-\s*(.+))?$')
+        for i, line in enumerate(lines):
+            hm = header_like_any.match(line.strip())
+            name = col = rarity = None
+            condition = ''
+            qty = 1
+            set_name = ''
+            if hm:
+                name, col, rarity = hm.groups()
+            else:
+                frag = header_fragment.match(line.strip())
+                if frag:
+                    name_part, code_prefix = frag.groups()
+                    # look forward for code continuation
+                    for fwd in range(1, 6):
+                        k = i + fwd
+                        if k >= len(lines):
+                            break
+                        contm = code_continue.match(lines[k].strip())
+                        if contm:
+                            code_suffix, rarity_word, maybe_cond = contm.groups()
+                            name = name_part
+                            col = f"{code_prefix}{code_suffix}".replace(' ', '')
+                            rarity = rarity_word
+                            if maybe_cond:
+                                condition = (maybe_cond or '').strip()
+                            break
+            if not name or not col or not rarity:
+                continue
+            # look ahead for game-set
+            if i+1 < len(lines):
+                nxt = lines[i+1].strip()
+                m_slot = re.match(r"^[A-Z](?:-[A-Z])?\s+(\d+)\s+[A-Za-z\-']+\s+-\s+(.+)$", nxt)
+                m_simple = re.match(r"^(\d+)\s+[A-Za-z\-']+\s+-\s+(.+)$", nxt)
+                m_game = re.match(r"^(Magic|Pokemon|Yu-Gi-Oh|YuGiOh|Marvel's Spider-Man)\s+-\s+(.+)$", nxt)
+                if m_slot:
+                    qty = int(m_slot.group(1)); set_name = m_slot.group(2).strip()
+                elif m_simple:
+                    qty = int(m_simple.group(1)); set_name = m_simple.group(2).strip()
+                elif m_game:
+                    set_name = m_game.group(2).strip()
+            # condition continuation
+            for off in (1,2,3):
+                if i+off < len(lines):
+                    hy = re.match(r'^[\-–]\s+(.+)$', lines[i+off].strip())
+                    if hy and not condition:
+                        condition = hy.group(1).strip()
+                        break
+            if set_name:
+                set_name = re.sub(r"^[A-Za-z\-']+\s+-\s+", "", set_name).strip()
+            condition = (condition or '').strip()
+            card_key = f"{name}|{col}|{condition}"
+            if card_key in seen_cards:
+                continue
+            seen_cards.add(card_key)
+            cards.append({
+                'name': name.strip(),
+                'quantity': int(qty),
+                'condition': condition,
+                'setName': set_name,
+                'collectorNumber': col.strip(),
+                'rarity': rarity.strip()
+            })
+
         # YGO back-link fallback: find 'YuGiOh - <Set>' lines, attach previous header-like '<Name> - #CODE - Rarity'
         game_only_line = re.compile(r"^(?:\d+\s+)?(Magic|Pokemon|Yu-Gi-Oh|YuGiOh|Marvel's Spider-Man)\s+-\s+(.+)$")
         header_like = re.compile(r'^(.+?)\s+-\s#([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)$')
