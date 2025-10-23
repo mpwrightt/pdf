@@ -70,7 +70,7 @@ const CONFIG = {
 /** Normalize collector number to comparable string (handle numbers and '123/456') */
 function normalizeCollector(num) {
   if (num === null || num === undefined) return '';
-  let s = String(num).trim().toUpperCase();
+  let s = String(num).trim().toUpperCase().replace(/\s+/g, ' ');
   if (!s) return '';
   // Pure numeric -> drop leading zeros
   if (/^\d+$/.test(s)) {
@@ -80,6 +80,14 @@ function normalizeCollector(num) {
   if (/^\d+\/\d+$/.test(s)) {
     const [a, b] = s.split('/');
     return `${parseInt(a, 10)}/${parseInt(b, 10)}`;
+  }
+  // YGO-style codes: e.g., DOOD-EN 085 vs DOOD-EN 85 -> unify by removing space and zero-padding to 3
+  // Only apply when a hyphenated alpha-numeric prefix exists
+  const ygo = s.match(/^([A-Z0-9]+-[A-Z0-9]+)\s*(\d+)$/);
+  if (ygo) {
+    const prefix = ygo[1];
+    const digits = ygo[2].padStart(3, '0');
+    return `${prefix}${digits}`;
   }
   return s; // alphanumerics like SWSH286 remain uppercased
 }

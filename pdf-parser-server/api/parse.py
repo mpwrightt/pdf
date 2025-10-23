@@ -240,7 +240,7 @@ class handler(BaseHTTPRequestHandler):
 
         # Pattern 8: Card line without game/set on same line; look at adjacent line for "<Game> - <Set>"
         card_no_game = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
-        card_no_game_no_hash = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        card_no_game_no_hash = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
         game_set_line = re.compile(r"^(?:\d+\s+)?[A-Za-z\-']+\s+-\s+(.+)$")
 
         lines = order_text.split('\n')
@@ -298,6 +298,9 @@ class handler(BaseHTTPRequestHandler):
                 if condition.endswith(g):
                     condition = condition[: -len(g)].rstrip()
                     break
+            # Clean set_name to remove any leading "Game - " prefix if present
+            if set_name:
+                set_name = re.sub(r"^[A-Za-z\-']+\s+-\s+", "", set_name).strip()
             card_key = f"{name}|{col}|{condition}"
             if card_key in seen_cards:
                 continue
@@ -317,7 +320,7 @@ class handler(BaseHTTPRequestHandler):
         #   M-T 1 Magic - Wilds of Eldraine: Enchanting Tales
         #   Foil
         header_no_qty = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
-        header_no_qty_no_hash = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        header_no_qty_no_hash = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s([A-Za-z0-9/\- ]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
         for i, line in enumerate(lines):
             m = header_no_qty.match(line)
             m2 = header_no_qty_no_hash.match(line)
@@ -382,6 +385,9 @@ class handler(BaseHTTPRequestHandler):
                 if condition.endswith(g):
                     condition = condition[: -len(g)].rstrip()
                     break
+            # Clean set_name to remove any leading "Game - " prefix if present
+            if set_name:
+                set_name = re.sub(r"^[A-Za-z\-']+\s+-\s+", "", set_name).strip()
             card_key = f"{name}|{col}|{condition}"
             if card_key in seen_cards:
                 continue
@@ -395,13 +401,26 @@ class handler(BaseHTTPRequestHandler):
                 'rarity': rarity.strip()
             })
         
+        # Cleanup: strip leading quantity that may have leaked into names like '1 Red Elemental Blast'
+        if cards:
+            for e in cards:
+                e['name'] = re.sub(r'^\d+\s+', '', e['name']).strip()
+
         # Dedupe: prefer entries with non-empty setName or cleaner condition (no embedded 'Game - ')
         if cards:
             best = {}
             def score(entry):
                 s = 0
-                if entry.get('setName'): s += 2
-                if ' - ' not in (entry.get('condition') or ''): s += 1
+                set_name = (entry.get('setName') or '')
+                cond = (entry.get('condition') or '')
+                if set_name:
+                    s += 2
+                    sn = set_name.lower()
+                    # Penalize malformed/borrowed set names (contain '#', embedded dashes chain, or 'magic -')
+                    if '#' in sn or ' - ' in sn or 'magic - ' in sn:
+                        s -= 2
+                if ' - ' not in cond:
+                    s += 1
                 return s
             for e in cards:
                 key = (e['name'].lower().strip(), (e.get('collectorNumber') or '').lower().strip())
