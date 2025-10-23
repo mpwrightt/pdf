@@ -174,11 +174,15 @@ class handler(BaseHTTPRequestHandler):
             # Skip table header rows
             if re.match(r'^(SLOT\s+)?QTY\s+PRODUCT\s+NAME\s+SET\s+NAME$', l, flags=re.IGNORECASE):
                 continue
+            # Normalize leading slot code prefixes like 'K 1 ' or 'K-T 1 ' -> '1 '
+            m_slot = re.match(r'^[A-Z](?:-[A-Z])?\s+(\d+)\s+(.*)$', l)
+            if m_slot:
+                l = f"{m_slot.group(1)} {m_slot.group(2)}".strip()
             cleaned_lines.append(l)
         order_text = '\n'.join(cleaned_lines)
         
         # Pattern 1: With "Bin X" prefix - handles multiline set names
-        pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
+        pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_bin, order_text, re.MULTILINE):
             # Get the line after this match to check for set name continuation
@@ -218,7 +222,7 @@ class handler(BaseHTTPRequestHandler):
         # Pattern 2: Standard format (no Bin prefix)
         # Matches: "1 CardName - #123 - R - Condition <Game> - Set" (Game can be Magic, Pokemon, etc.)
         # Allow game tokens with hyphens/apostrophes (e.g., Yu-Gi-Oh, Marvel's)
-        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
+        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_standard, order_text, re.MULTILINE):
             condition = match.group(5).strip()
@@ -235,9 +239,9 @@ class handler(BaseHTTPRequestHandler):
                 })
 
         # Pattern 8: Card line without game/set on same line; look at adjacent line for "<Game> - <Set>"
-        card_no_game = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
-        card_no_game_no_hash = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
-        game_set_line = re.compile(r"^[A-Za-z\-']+\s+-\s+(.+)$")
+        card_no_game = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        card_no_game_no_hash = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        game_set_line = re.compile(r"^(?:\d+\s+)?[A-Za-z\-']+\s+-\s+(.+)$")
 
         lines = order_text.split('\n')
         for i, line in enumerate(lines):
@@ -256,13 +260,128 @@ class handler(BaseHTTPRequestHandler):
                 gs = game_set_line.match(lines[i+1].strip())
                 if gs:
                     set_name = gs.group(1).strip()
+            # If the 'col' token looks like a rarity (e.g., 'U', 'C', 'R', 'M', 'Common', 'Uncommon', etc.),
+            # then this line likely has NO collector number and the trailing token is actually the set name.
+            rarity_alias = {
+                'common': 'Common',
+                'uncommon': 'Uncommon',
+                'rare': 'Rare',
+                'mythic': 'Mythic',
+                'special': 'Special',
+                'promo': 'Promo',
+                'short print': 'Short Print',
+                'secret rare': 'Secret Rare',
+                'double rare': 'Double Rare',
+                'illustration rare': 'Illustration Rare',
+                'ultra rare': 'Ultra Rare',
+                'holo rare': 'Holo Rare',
+                'super rare': 'Super Rare'
+            }
+            col_l = col.strip().lower()
+            col_is_letter_code = len(col.strip()) == 1 and col.strip().upper() in {'C','U','R','M','S'}
+            col_is_word = col_l in rarity_alias
+            if col_is_letter_code or col_is_word:
+                # shift fields: rarity comes from 'col', condition from 'rarity', and 'condition' token is actually set
+                mapped_rarity = col.strip().upper() if col_is_letter_code else rarity_alias[col_l]
+                set_name = set_name or condition.strip()
+                condition = rarity  # e.g., 'Lightly Played Magic'
+                rarity = mapped_rarity
+                col = ''  # no collector number present
             condition = condition.strip()
             # If condition still contains inline "<Game> - <Set>", split it
             m_inline = re.match(r"^(.*?)\s+[A-Za-z\-']+\s+-\s+(.+)$", condition)
             if m_inline:
                 condition = m_inline.group(1).strip()
+                set_name = m_inline.group(2).strip()
+            # If condition ends with a lone game token (no dash), drop it
+            for g in ("Magic", "Pokemon", "Yu-Gi-Oh", "Marvel's Spider-Man"):
+                if condition.endswith(g):
+                    condition = condition[: -len(g)].rstrip()
+                    break
+            card_key = f"{name}|{col}|{condition}"
+            if card_key in seen_cards:
+                continue
+            seen_cards.add(card_key)
+            cards.append({
+                'name': name.strip(),
+                'quantity': int(qty),
+                'condition': condition,
+                'setName': set_name,
+                'collectorNumber': col.strip(),
+                'rarity': rarity.strip()
+            })
+
+        # Pattern 9: Header line without quantity; next/prev line contains quantity and game-set
+        # Example:
+        #   Bitterblossom (Anime Borderless) (Confetti Foil) - #92 - M - Near Mint
+        #   M-T 1 Magic - Wilds of Eldraine: Enchanting Tales
+        #   Foil
+        header_no_qty = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        header_no_qty_no_hash = re.compile(r'^(?![A-Z](?:-[A-Z])?\s+\d+\s)(?!\d+\s)(.+?)\s+-\s([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        for i, line in enumerate(lines):
+            m = header_no_qty.match(line)
+            m2 = header_no_qty_no_hash.match(line)
+            if not m and not m2:
+                continue
+            name, col, rarity, condition = (m.groups() if m else m2.groups())
+            qty = 1
+            set_name = ''
+
+            # Prefer inline Game - Set in the condition token
+            m_inline = re.match(r"^(.*?)\s+[A-Za-z\-']+\s+-\s+(.+)$", condition.strip())
+            if m_inline:
+                condition = m_inline.group(1).strip()
+                set_name = m_inline.group(2).strip()
+
+            # If 'col' looks like a rarity code/word, shift fields (no collector number)
+            rarity_alias = {
+                'common': 'Common', 'uncommon': 'Uncommon', 'rare': 'Rare', 'mythic': 'Mythic',
+                'special': 'Special', 'promo': 'Promo', 'short print': 'Short Print',
+                'secret rare': 'Secret Rare', 'double rare': 'Double Rare',
+                'illustration rare': 'Illustration Rare', 'ultra rare': 'Ultra Rare',
+                'holo rare': 'Holo Rare', 'super rare': 'Super Rare'
+            }
+            col_l = col.strip().lower()
+            col_is_letter_code = len(col.strip()) == 1 and col.strip().upper() in {'C','U','R','M','S','L','T'}
+            col_is_word = col_l in rarity_alias
+            if col_is_letter_code or col_is_word:
+                mapped_rarity = col.strip().upper() if col_is_letter_code else rarity_alias[col_l]
+                # If no inline set yet, try to treat current 'rarity' token as condition and 'condition' token as set
                 if not set_name:
-                    set_name = m_inline.group(2).strip()
+                    set_name = condition.strip()
+                condition = rarity.strip()
+                rarity = mapped_rarity
+                col = ''  # ensure dedupe with other paths
+
+            # Look next for quantity + game-set if set_name still empty
+            if not set_name and i+1 < len(lines):
+                nxt = lines[i+1].strip()
+                m_slot = re.match(r"^[A-Z](?:-[A-Z])?\s+(\d+)\s+[A-Za-z\-']+\s+-\s+(.+)$", nxt)
+                m_simple = re.match(r"^(\d+)\s+[A-Za-z\-']+\s+-\s+(.+)$", nxt)
+                m_game = re.match(r"^[A-Za-z\-']+\s+-\s+(.+)$", nxt)
+                if m_slot:
+                    qty = int(m_slot.group(1))
+                    set_name = m_slot.group(2).strip()
+                elif m_simple:
+                    qty = int(m_simple.group(1))
+                    set_name = m_simple.group(2).strip()
+                elif m_game:
+                    set_name = m_game.group(1).strip()
+            # Merge trailing 'Foil' line into condition if present
+            if i+2 < len(lines):
+                nxt2 = lines[i+2].strip()
+                if nxt2.lower() == 'foil' and 'foil' not in condition.lower():
+                    condition = (condition + ' Foil').strip()
+                # If set_name looks truncated and next token is a short word continuation (e.g., 'Tales'), append it
+                if set_name and nxt2 and ' - ' not in nxt2 and nxt2.lower() not in {'foil'} and not re.search(r'\d', nxt2) and len(nxt2) <= 20:
+                    set_name = (set_name + ' ' + nxt2).strip()
+
+            condition = condition.strip()
+            # Remove trailing lone game token if stuck in condition
+            for g in ("Magic", "Pokemon", "Yu-Gi-Oh", "Marvel's Spider-Man"):
+                if condition.endswith(g):
+                    condition = condition[: -len(g)].rstrip()
+                    break
             card_key = f"{name}|{col}|{condition}"
             if card_key in seen_cards:
                 continue
@@ -276,6 +395,20 @@ class handler(BaseHTTPRequestHandler):
                 'rarity': rarity.strip()
             })
         
+        # Dedupe: prefer entries with non-empty setName or cleaner condition (no embedded 'Game - ')
+        if cards:
+            best = {}
+            def score(entry):
+                s = 0
+                if entry.get('setName'): s += 2
+                if ' - ' not in (entry.get('condition') or ''): s += 1
+                return s
+            for e in cards:
+                key = (e['name'].lower().strip(), (e.get('collectorNumber') or '').lower().strip())
+                if key not in best or score(e) > score(best[key]):
+                    best[key] = e
+            cards = list(best.values())
+
         # Pattern 3: Bin format WITHOUT collector number (e.g. "Bin 7 2 Raging Goblin - C - Lightly Played Magic - Portal")
         pattern_bin_no_num = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
         
@@ -309,7 +442,7 @@ class handler(BaseHTTPRequestHandler):
         # Pattern 4: Extreme split case (card name on one line, Bin+qty on next)
         # Handles cases where condition might be split across 3 lines
         # Use a broad name matcher to include apostrophes and punctuation; allow collector numbers with slashes
-        pattern_split = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z ]+)$'
+        pattern_split = r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z ]+)$'
         
         for match in re.finditer(pattern_split, order_text, re.MULTILINE):
             match_end = match.end()
@@ -355,7 +488,7 @@ class handler(BaseHTTPRequestHandler):
         #   Mondrak, Glory Dominus (Oil Slick Raised Foil) - #346 - M -
         #   Bin 8-T 1 Magic - Phyrexia: All Will Be One
         #   Lightly Played Foil
-        pattern_split_no_cond = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s*$'
+        pattern_split_no_cond = r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s*$'
         for match in re.finditer(pattern_split_no_cond, order_text, re.MULTILINE):
             match_end = match.end()
             next_line_start = match_end + 1
@@ -391,14 +524,14 @@ class handler(BaseHTTPRequestHandler):
         #   Hakbal ... - #19 - M - Lightly Magic - Commander: The Lost Caverns of
         #   Bin 8 1
         #   Played Foil Ixalan
-        pattern_split_bin_simple = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z]+)\s+[A-Za-z\-\']+\s+-\s+(.+)$'
+        pattern_split_bin_simple = r'^(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z]+)\s+[A-Za-z\-\']+\s+-\s+(.+)$'
 
         # Pattern 7: Slot-letter prefix quantity (e.g., "X 1 Pikachu ... - #027/078 - Common - Near Mint Pokemon - Pokemon GO")
-        pattern_slotqty = r'^[A-Z]\s+(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
-        pattern_slotqty_no_hash = r'^[A-Z]\s+(\d+)\s+(.+?)\s+-\s(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
+        pattern_slotqty = r'^[A-Z](?:-[A-Z])?\s+(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
+        pattern_slotqty_no_hash = r'^[A-Z](?:-[A-Z])?\s+(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
 
         # Pattern 2b: Standard format without '#' before collector number (e.g., "1 Ditto - 132/165 - Rare - Near Mint Pokemon - Deck Exclusives")
-        pattern_standard_no_hash = r'^(\d+)\s+(.+?)\s+-\s(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z]+\s+-\s+(.+?)$'
+        pattern_standard_no_hash = r'^(\d+)\s+(.+?)\s+-\s([A-Za-z0-9/\-]+)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
         condition_tokens_whitelist = {
             'near', 'mint', 'lightly', 'played', 'moderately', 'heavily', 'damaged', 'foil',
             'nm', 'lp', 'mp', 'hp', 'nif', 'lpf', 'mpf', 'nmf', 'good', 'excellent', 'poor',
