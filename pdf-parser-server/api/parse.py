@@ -329,5 +329,66 @@ class handler(BaseHTTPRequestHandler):
                         'collectorNumber': match.group(2).strip(),
                         'rarity': match.group(3).strip()
                     })
+
+        # Pattern 6: Split case where the line with Bin information lacks the "Magic -" portion
+        # Example:
+        #   Hakbal ... - #19 - M - Lightly Magic - Commander: The Lost Caverns of
+        #   Bin 8 1
+        #   Played Foil Ixalan
+        pattern_split_bin_simple = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+([A-Za-z]+)\s+Magic\s+-\s+(.+)$'
+        condition_tokens_whitelist = {
+            'near', 'mint', 'lightly', 'played', 'moderately', 'heavily', 'damaged', 'foil',
+            'nm', 'lp', 'mp', 'hp', 'nif', 'lpf', 'mpf', 'nmf', 'good', 'excellent', 'poor',
+            'signed', 'graded', 'pld', 'gd', 'ex', 'sp', 'pr', 'heavily', 'moderate', 'moderately', 'light'
+        }
+        for match in re.finditer(pattern_split_bin_simple, order_text, re.MULTILINE):
+            match_end = match.end()
+            next_line_start = match_end + 1
+            next_line_end = order_text.find('\n', next_line_start)
+            if next_line_end == -1:
+                next_line_end = len(order_text)
+            next_line = order_text[next_line_start:next_line_end].strip()
+
+            bin_match = re.match(r'Bin\s+[\w\-]+\s+(\d+)', next_line)
+            if bin_match:
+                # Third line contains remaining condition + possible set tail
+                third_line_start = next_line_end + 1
+                third_line_end = order_text.find('\n', third_line_start)
+                if third_line_end == -1:
+                    third_line_end = len(order_text)
+                third_line = order_text[third_line_start:third_line_end].strip()
+
+                condition_part1 = match.group(4).strip()
+                set_part1 = match.group(5).strip()
+
+                additional_condition_tokens = []
+                set_tail_tokens = []
+                tokens = third_line.split()
+                for token in tokens:
+                    clean = re.sub(r'[^a-z]', '', token.lower())
+                    if clean in condition_tokens_whitelist and not set_tail_tokens:
+                        additional_condition_tokens.append(token)
+                    else:
+                        set_tail_tokens.append(token)
+
+                condition_tokens = [condition_part1] + additional_condition_tokens
+                full_condition = ' '.join(condition_tokens).strip()
+
+                if set_tail_tokens:
+                    full_set = f"{set_part1} {' '.join(set_tail_tokens)}".strip()
+                else:
+                    full_set = set_part1
+
+                card_key = f"{match.group(1)}|{match.group(2)}|{full_condition}"
+                if card_key not in seen_cards:
+                    seen_cards.add(card_key)
+                    cards.append({
+                        'name': match.group(1).strip(),
+                        'quantity': int(bin_match.group(1)),
+                        'condition': full_condition,
+                        'setName': full_set,
+                        'collectorNumber': match.group(2).strip(),
+                        'rarity': match.group(3).strip()
+                    })
         
         return cards
