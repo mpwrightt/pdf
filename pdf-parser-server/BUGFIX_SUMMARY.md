@@ -292,9 +292,40 @@ RR pattern: RR[ \t]+\d+[ \t]+Box[ \t]+[\w\-]+
 
 ---
 
+## Issue 8: Lowercase Names and PO BOX with Periods
+**Commit:** `579eefa`
+**Date:** Oct 23, 2025 19:40
+
+### Problem
+Buyer name "philip alston" with address "p.o. box 103" was not extracted because:
+- Name was all lowercase (pattern required capital first letter)
+- Address used "p.o." with periods instead of "PO"
+
+### Root Cause
+1. Name pattern used `[a-z\-]*` after first letter, requiring lowercase only
+2. PO BOX pattern was case-sensitive and didn't allow periods: `PO[ \t]+BOX`
+
+### Solution
+Made pattern more flexible:
+```regex
+Name: [a-z\-]* → [A-Za-z\-]*
+PO BOX: PO[ \t]+BOX → [Pp]\.?[Oo]\.?[ \t]+[Bb][Oo][Xx]
+```
+
+This allows:
+- Any case in names: "philip alston", "JOHN SMITH", "Philip Smith"
+- PO BOX variations: "p.o. box", "P.O. BOX", "po box", "PO BOX"
+
+### Examples Fixed
+- "philip alston" with "p.o. box 103" ✓
+- Order: 251014-4F1F ✓
+
+---
+
 ## Commit History
 
 ```
+579eefa - fix: support lowercase names and p.o. box addresses with periods
 0bd2267 - fix: support Hawaiian and international address formats (HC, RR, hyphenated house numbers)
 0669b50 - fix: restrict buyer name extraction to Shipping Address section only
 4be3233 - fix: support alphanumeric street addresses (e.g., N58W23783 Hastings Ct)
