@@ -508,8 +508,8 @@ function normalizeCondition(condition) {
   const cond = condition.toLowerCase().trim();
   
   // Map various condition formats to standard abbreviations
-  if (cond.includes('near mint') || cond === 'nm' || cond === 'nmf') return 'nm';
-  if (cond.includes('lightly played') || cond.includes('light') || cond === 'lp' || cond === 'lpf') return 'lp';
+  if (cond.includes('near mint') || cond === 'nm' || cond === 'nmf' || cond === 'nmh' || cond === 'nmrh') return 'nm';
+  if (cond.includes('lightly played') || cond.includes('light') || cond === 'lp' || cond === 'lpf' || cond === 'lph') return 'lp';
   if (cond.includes('moderately played') || cond.includes('moderate') || cond === 'mp' || cond === 'mpf') return 'mp';
   if (cond.includes('heavily played') || cond.includes('heavy') || cond === 'hp' || cond === 'hpf') return 'hp';
   if (cond.includes('damaged') || cond === 'dmg') return 'damaged';
@@ -526,6 +526,17 @@ function normalizeNameExact(name) {
     .replace(/\s+/g, ' ')
     .replace(/\s*,\s*/g, ',')
     .toLowerCase()
+    .trim();
+}
+
+// Normalize set names (ignore extra descriptors like 'Holofoil')
+function normalizeSetName(setName) {
+  return (setName || '')
+    .toLowerCase()
+    .replace(/\s*\n\s*/g, ' ')
+    .replace(/[():]/g, ' ') // remove punctuation that splits tokens
+    .replace(/\b(holofoil)\b/g, '') // drop noise terms
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -593,8 +604,9 @@ function findMatchingOrder(cardName, setName, condition, collectorNum, orders) {
         cardNameBase === baseCardName ||
         cardNameLoose === looseCardName
       );
-      const matchesSet = card.setName.toLowerCase().includes(normalizedSetName) || 
-                         normalizedSetName.includes(card.setName.toLowerCase());
+      const pdfSetNorm = normalizeSetName(card.setName);
+      const csvSetNorm = normalizeSetName(setName);
+      const matchesSet = pdfSetNorm.includes(csvSetNorm) || csvSetNorm.includes(pdfSetNorm);
       const matchesCondition = normalizeCondition(card.condition) === normalizedCondition;
       
       if (matchesName && matchesSet && matchesCondition) {

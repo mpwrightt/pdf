@@ -163,7 +163,7 @@ class handler(BaseHTTPRequestHandler):
         seen_cards = set()  # Deduplicate by name+collector#
         
         # Pattern 1: With "Bin X" prefix - handles multiline set names
-        pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+(.+?)$'
+        pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_bin, order_text, re.MULTILINE):
             # Get the line after this match to check for set name continuation
@@ -202,7 +202,7 @@ class handler(BaseHTTPRequestHandler):
         
         # Pattern 2: Standard format (no Bin prefix)
         # Matches: "1 CardName - #123 - R - Condition <Game> - Set" (Game can be Magic, Pokemon, etc.)
-        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+(.+?)\s+[A-Za-z]+\s+-\s+(.+?)$'
+        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z]+\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_standard, order_text, re.MULTILINE):
             condition = match.group(5).strip()
@@ -219,7 +219,7 @@ class handler(BaseHTTPRequestHandler):
                 })
         
         # Pattern 3: Bin format WITHOUT collector number (e.g. "Bin 7 2 Raging Goblin - C - Lightly Played Magic - Portal")
-        pattern_bin_no_num = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s+(\w+)\s+-\s+(.+?)$'
+        pattern_bin_no_num = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_bin_no_num, order_text, re.MULTILINE):
             # Skip if card name contains collector number (would be caught by pattern 1)
@@ -251,7 +251,7 @@ class handler(BaseHTTPRequestHandler):
         # Pattern 4: Extreme split case (card name on one line, Bin+qty on next)
         # Handles cases where condition might be split across 3 lines
         # Use a broad name matcher to include apostrophes and punctuation; allow collector numbers with slashes
-        pattern_split = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+([A-Za-z ]+)$'
+        pattern_split = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z ]+)$'
         
         for match in re.finditer(pattern_split, order_text, re.MULTILINE):
             match_end = match.end()
@@ -297,7 +297,7 @@ class handler(BaseHTTPRequestHandler):
         #   Mondrak, Glory Dominus (Oil Slick Raised Foil) - #346 - M -
         #   Bin 8-T 1 Magic - Phyrexia: All Will Be One
         #   Lightly Played Foil
-        pattern_split_no_cond = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s*$'
+        pattern_split_no_cond = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s*$'
         for match in re.finditer(pattern_split_no_cond, order_text, re.MULTILINE):
             match_end = match.end()
             next_line_start = match_end + 1
@@ -333,7 +333,10 @@ class handler(BaseHTTPRequestHandler):
         #   Hakbal ... - #19 - M - Lightly Magic - Commander: The Lost Caverns of
         #   Bin 8 1
         #   Played Foil Ixalan
-        pattern_split_bin_simple = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+([A-Za-z]+)\s+[A-Za-z]+\s+-\s+(.+)$'
+        pattern_split_bin_simple = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z]+)\s+[A-Za-z]+\s+-\s+(.+)$'
+
+        # Pattern 2b: Standard format without '#' before collector number (e.g., "1 Ditto - 132/165 - Rare - Near Mint Pokemon - Deck Exclusives")
+        pattern_standard_no_hash = r'^(\d+)\s+(.+?)\s+-\s(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z]+\s+-\s+(.+?)$'
         condition_tokens_whitelist = {
             'near', 'mint', 'lightly', 'played', 'moderately', 'heavily', 'damaged', 'foil',
             'nm', 'lp', 'mp', 'hp', 'nif', 'lpf', 'mpf', 'nmf', 'good', 'excellent', 'poor',
@@ -388,5 +391,20 @@ class handler(BaseHTTPRequestHandler):
                         'collectorNumber': match.group(2).strip(),
                         'rarity': match.group(3).strip()
                     })
+
+        # Iterate Pattern 2b (no '#')
+        for match in re.finditer(pattern_standard_no_hash, order_text, re.MULTILINE):
+            condition = match.group(5).strip()
+            card_key = f"{match.group(2)}|{match.group(3)}|{condition}"
+            if card_key not in seen_cards:
+                seen_cards.add(card_key)
+                cards.append({
+                    'name': match.group(2).strip(),
+                    'quantity': int(match.group(1)),
+                    'condition': condition,
+                    'setName': match.group(6).strip(),
+                    'collectorNumber': match.group(3).strip(),
+                    'rarity': match.group(4).strip()
+                })
         
         return cards
