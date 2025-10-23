@@ -161,6 +161,21 @@ class handler(BaseHTTPRequestHandler):
         """Extract card details from order section - robust multi-line handling"""
         cards = []
         seen_cards = set()  # Deduplicate by name+collector#
+
+        # Preprocess: drop slot headers and table headers that can break patterns
+        cleaned_lines = []
+        for line in order_text.split('\n'):
+            l = line.strip()
+            if not l:
+                continue
+            # Skip slot header like "Slot C - Near Mint" or "Slot X - Lightly Played"
+            if re.match(r'^Slot\s+[A-Z]\s+-\s+', l, flags=re.IGNORECASE):
+                continue
+            # Skip table header rows
+            if re.match(r'^(SLOT\s+)?QTY\s+PRODUCT\s+NAME\s+SET\s+NAME$', l, flags=re.IGNORECASE):
+                continue
+            cleaned_lines.append(l)
+        order_text = '\n'.join(cleaned_lines)
         
         # Pattern 1: With "Bin X" prefix - handles multiline set names
         pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
@@ -202,7 +217,8 @@ class handler(BaseHTTPRequestHandler):
         
         # Pattern 2: Standard format (no Bin prefix)
         # Matches: "1 CardName - #123 - R - Condition <Game> - Set" (Game can be Magic, Pokemon, etc.)
-        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z]+\s+-\s+(.+?)$'
+        # Allow game tokens with hyphens/apostrophes (e.g., Yu-Gi-Oh, Marvel's)
+        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_standard, order_text, re.MULTILINE):
             condition = match.group(5).strip()
@@ -217,6 +233,48 @@ class handler(BaseHTTPRequestHandler):
                     'collectorNumber': match.group(3).strip(),
                     'rarity': match.group(4).strip()
                 })
+
+        # Pattern 8: Card line without game/set on same line; look at adjacent line for "<Game> - <Set>"
+        card_no_game = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        card_no_game_no_hash = re.compile(r'^(?:[A-Z]\s+)?(\d+)\s+(.+?)\s+-\s(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$')
+        game_set_line = re.compile(r"^[A-Za-z\-']+\s+-\s+(.+)$")
+
+        lines = order_text.split('\n')
+        for i, line in enumerate(lines):
+            m = card_no_game.match(line)
+            m2 = card_no_game_no_hash.match(line)
+            if not m and not m2:
+                continue
+            qty, name, col, rarity, condition = (m.groups() if m else m2.groups())
+            # look previous then next for game-set
+            set_name = ''
+            if i-1 >= 0:
+                gs = game_set_line.match(lines[i-1].strip())
+                if gs:
+                    set_name = gs.group(1).strip()
+            if not set_name and i+1 < len(lines):
+                gs = game_set_line.match(lines[i+1].strip())
+                if gs:
+                    set_name = gs.group(1).strip()
+            condition = condition.strip()
+            # If condition still contains inline "<Game> - <Set>", split it
+            m_inline = re.match(r"^(.*?)\s+[A-Za-z\-']+\s+-\s+(.+)$", condition)
+            if m_inline:
+                condition = m_inline.group(1).strip()
+                if not set_name:
+                    set_name = m_inline.group(2).strip()
+            card_key = f"{name}|{col}|{condition}"
+            if card_key in seen_cards:
+                continue
+            seen_cards.add(card_key)
+            cards.append({
+                'name': name.strip(),
+                'quantity': int(qty),
+                'condition': condition,
+                'setName': set_name,
+                'collectorNumber': col.strip(),
+                'rarity': rarity.strip()
+            })
         
         # Pattern 3: Bin format WITHOUT collector number (e.g. "Bin 7 2 Raging Goblin - C - Lightly Played Magic - Portal")
         pattern_bin_no_num = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
@@ -333,7 +391,11 @@ class handler(BaseHTTPRequestHandler):
         #   Hakbal ... - #19 - M - Lightly Magic - Commander: The Lost Caverns of
         #   Bin 8 1
         #   Played Foil Ixalan
-        pattern_split_bin_simple = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z]+)\s+[A-Za-z]+\s+-\s+(.+)$'
+        pattern_split_bin_simple = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+([A-Za-z]+)\s+[A-Za-z\-\']+\s+-\s+(.+)$'
+
+        # Pattern 7: Slot-letter prefix quantity (e.g., "X 1 Pikachu ... - #027/078 - Common - Near Mint Pokemon - Pokemon GO")
+        pattern_slotqty = r'^[A-Z]\s+(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
+        pattern_slotqty_no_hash = r'^[A-Z]\s+(\d+)\s+(.+?)\s+-\s(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z\-\']+\s+-\s+(.+?)$'
 
         # Pattern 2b: Standard format without '#' before collector number (e.g., "1 Ditto - 132/165 - Rare - Near Mint Pokemon - Deck Exclusives")
         pattern_standard_no_hash = r'^(\d+)\s+(.+?)\s+-\s(\d+(?:/\d+)?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)\s+[A-Za-z]+\s+-\s+(.+?)$'
