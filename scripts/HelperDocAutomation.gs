@@ -70,9 +70,18 @@ const CONFIG = {
 /** Normalize collector number to comparable string (handle numbers and '123/456') */
 function normalizeCollector(num) {
   if (num === null || num === undefined) return '';
-  const s = String(num).trim();
+  let s = String(num).trim().toUpperCase();
   if (!s) return '';
-  return s; // keep as string, comparisons are string-based
+  // Pure numeric -> drop leading zeros
+  if (/^\d+$/.test(s)) {
+    return String(parseInt(s, 10));
+  }
+  // Fractional numeric like 0307/123 -> normalize each segment
+  if (/^\d+\/\d+$/.test(s)) {
+    const [a, b] = s.split('/');
+    return `${parseInt(a, 10)}/${parseInt(b, 10)}`;
+  }
+  return s; // alphanumerics like SWSH286 remain uppercased
 }
 
 /**
@@ -505,13 +514,19 @@ function fillOrderInfo(parsedOrders) {
  * Normalize condition to standard abbreviation
  */
 function normalizeCondition(condition) {
-  const cond = condition.toLowerCase().trim();
+  const cond = (condition || '').toLowerCase().trim();
   
-  // Map various condition formats to standard abbreviations
-  if (cond.includes('near mint') || cond === 'nm' || cond === 'nmf' || cond === 'nmh' || cond === 'nmrh') return 'nm';
-  if (cond.includes('lightly played') || cond.includes('light') || cond === 'lp' || cond === 'lpf' || cond === 'lph') return 'lp';
-  if (cond.includes('moderately played') || cond.includes('moderate') || cond === 'mp' || cond === 'mpf') return 'mp';
-  if (cond.includes('heavily played') || cond.includes('heavy') || cond === 'hp' || cond === 'hpf') return 'hp';
+  // Fast-path codes like nm1, nmh, nmrh, lph, lpf, etc.
+  if (cond.startsWith('nm')) return 'nm';
+  if (cond.startsWith('lp')) return 'lp';
+  if (cond.startsWith('mp')) return 'mp';
+  if (cond.startsWith('hp')) return 'hp';
+
+  // Map various verbose formats to standard abbreviations
+  if (cond.includes('near mint')) return 'nm';
+  if (cond.includes('lightly played') || cond.includes('light')) return 'lp';
+  if (cond.includes('moderately played') || cond.includes('moderate')) return 'mp';
+  if (cond.includes('heavily played') || cond.includes('heavy')) return 'hp';
   if (cond.includes('damaged') || cond === 'dmg') return 'damaged';
   
   return cond; // Return as-is if no match
@@ -628,9 +643,9 @@ function findMatchingOrder(cardName, setName, condition, collectorNum, orders) {
         };
       }
 
-      // Capture collector-number-based fallback if set matches and collector matches
+      // Capture collector-number-based fallback when collector matches; prefer if name OR set matches
       const pdfCollector = normalizeCollector(card.collectorNumber);
-      if (!collectorCandidate && normalizedCollector && pdfCollector && normalizedCollector === pdfCollector && matchesSet) {
+      if (!collectorCandidate && normalizedCollector && pdfCollector && normalizedCollector === pdfCollector && (matchesSet || matchesName)) {
         collectorCandidate = {
           orderNumber: order.orderNumber,
           buyerName: order.buyerName,
