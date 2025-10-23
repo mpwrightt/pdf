@@ -228,38 +228,53 @@ Changes:
 ---
 
 ## Issue 7: Buyer Names with Alphanumeric Street Addresses
-**Commit:** `4be3233`
-**Date:** Oct 23, 2025 17:30
+**Commits:** `4be3233` (initial fix), `0669b50` (scope restriction fix)
+**Date:** Oct 23, 2025 17:30-17:45
 
 ### Problem
 Buyer names were not extracted when the street address started with alphanumeric characters instead of just digits.
 
 Example address: "N58W23783 Hastings Ct" (Wisconsin-style address with directional prefix)
 
-### Root Cause
+### Root Cause (Initial)
 Name regex pattern required addresses to start with a digit (`\d+`). Wisconsin-style addresses use directional prefixes (N=North, S=South, E=East, W=West) followed by coordinates.
 
-### Solution
+### Solution (Initial - Commit 4be3233)
 Broadened address pattern to accept any alphanumeric start:
 ```regex
 Before: \d+[ \t]+[\w \t]+
 After:  [A-Za-z0-9]+[ \t]+[\w \t]+
 ```
 
-This change allows:
-- Traditional numeric: "123 Main St"
-- Alphanumeric: "N58W23783 Hastings Ct"
+### Problem (Regression)
+The broadened pattern was too permissive and matched seller names and set names from the "Included Orders" table instead of buyer names. Examples of incorrect matches:
+- "Commander Masters" (set name)
+- "The List Reprints" (set name)
+- "Dominaria United" (set name)
+- "Included Orders" (table header)
+
+### Root Cause (Regression)
+Pattern was searching the entire order text, and "Included Orders" followed by table headers looked like a name + address. Taking the last match selected names from the wrong section.
+
+### Solution (Final - Commit 0669b50)
+Restricted the search scope to only the "Shipping Address" section:
+- Extract text between `Shipping Address\n` and `Shipping Method:`
+- Search for name pattern only within that section
+- Take first match (the recipient name)
+- Added exclusions: "Included Orders", "Seller Name", "Order Number"
 
 ### Examples Fixed
 - "Ryan Nelsen-Freund" with "N58W23783 Hastings Ct" ✓
 - Order: 251013-9BDB ✓
 - All previous address formats still work ✓
+- No longer matches set names or seller names ✓
 
 ---
 
 ## Commit History
 
 ```
+0669b50 - fix: restrict buyer name extraction to Shipping Address section only
 4be3233 - fix: support alphanumeric street addresses (e.g., N58W23783 Hastings Ct)
 26b8237 - fix: support reverse name format and names with periods
 ffab6d2 - fix: support PO BOX and military addresses in buyer name extraction
