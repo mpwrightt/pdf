@@ -418,45 +418,68 @@ function processPDFUpload(base64Data, fileName) {
  * Call Vercel API to parse PDF
  */
 function callVercelAPI(blob) {
-  try {
-    const base64PDF = Utilities.base64Encode(blob.getBytes());
-    
-    const options = {
-      method: 'post',
-      contentType: 'application/json',
-      payload: JSON.stringify({ pdf: base64PDF }),
-      muteHttpExceptions: true
-    };
-    
-    Logger.log(`Calling Vercel API: ${CONFIG.VERCEL_API_URL}`);
-    const response = UrlFetchApp.fetch(CONFIG.VERCEL_API_URL, options);
-    const statusCode = response.getResponseCode();
-    const responseText = response.getContentText();
-    
-    Logger.log(`API Response Status: ${statusCode}`);
-    Logger.log(`API Response (first 500 chars): ${responseText.substring(0, 500)}`);
-    
-    if (statusCode !== 200) {
-      throw new Error(`API returned status ${statusCode}: ${responseText.substring(0, 200)}`);
+  const base64PDF = Utilities.base64Encode(blob.getBytes());
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ pdf: base64PDF }),
+    muteHttpExceptions: true,
+    followRedirects: true,
+    validateHttpsCertificates: true
+  };
+
+  const maxAttempts = 3;
+  let lastErrText = '';
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      Logger.log(`Calling Vercel API (attempt ${attempt}/${maxAttempts}): ${CONFIG.VERCEL_API_URL}`);
+      const response = UrlFetchApp.fetch(CONFIG.VERCEL_API_URL, options);
+      const statusCode = response.getResponseCode();
+      const responseText = response.getContentText();
+      Logger.log(`API Response Status: ${statusCode}`);
+      Logger.log(`API Response (first 500 chars): ${responseText.substring(0, 500)}`);
+
+      if (statusCode !== 200) {
+        lastErrText = `HTTP ${statusCode}: ${responseText.substring(0, 200)}`;
+        if (attempt < maxAttempts) {
+          Utilities.sleep(500 * Math.pow(2, attempt - 1));
+          continue;
+        }
+        throw new Error(`API returned status ${statusCode}: ${responseText.substring(0, 200)}`);
+      }
+
+      const responseData = JSON.parse(responseText);
+      if (!responseData.success) {
+        lastErrText = responseData.error || 'API request failed';
+        if (attempt < maxAttempts) {
+          Utilities.sleep(500 * Math.pow(2, attempt - 1));
+          continue;
+        }
+        throw new Error(lastErrText);
+      }
+
+      Logger.log(`Found ${responseData.orders.length} orders in PDF`);
+      if (responseData.orders.length > 0) {
+        Logger.log(`First order: ${responseData.orders[0].orderNumber}, ${responseData.orders[0].cards.length} cards`);
+      }
+      return responseData.orders;
+    } catch (err) {
+      lastErrText = String(err && err.message ? err.message : err);
+      // transient network/model issues like 'unavailable: unexpected EOF'
+      if (attempt < maxAttempts && /unavailable|eof|timeout|timed out|rate limit/i.test(lastErrText)) {
+        Logger.log(`Transient error calling API (attempt ${attempt}): ${lastErrText}. Retrying...`);
+        Utilities.sleep(500 * Math.pow(2, attempt - 1));
+        continue;
+      }
+      if (attempt >= maxAttempts) {
+        Logger.log('Error calling Vercel API (final): ' + lastErrText);
+        throw new Error('Failed to parse PDF via API: ' + lastErrText);
+      }
     }
-    
-    const responseData = JSON.parse(responseText);
-    
-    if (!responseData.success) {
-      throw new Error(responseData.error || 'API request failed');
-    }
-    
-    Logger.log(`Found ${responseData.orders.length} orders in PDF`);
-    if (responseData.orders.length > 0) {
-      Logger.log(`First order: ${responseData.orders[0].orderNumber}, ${responseData.orders[0].cards.length} cards`);
-    }
-    
-    return responseData.orders;
-    
-  } catch (error) {
-    Logger.log('Error calling Vercel API: ' + error.toString());
-    throw new Error('Failed to parse PDF via API: ' + error.message);
   }
+
+  throw new Error('Failed to parse PDF via API: ' + lastErrText);
 }
 
 /**
