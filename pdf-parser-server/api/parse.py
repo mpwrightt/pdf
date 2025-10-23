@@ -163,7 +163,7 @@ class handler(BaseHTTPRequestHandler):
         seen_cards = set()  # Deduplicate by name+collector#
         
         # Pattern 1: With "Bin X" prefix - handles multiline set names
-        pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s+#(\d+)\s+-\s+(\w+)\s+-\s+(.+?)$'
+        pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_bin, order_text, re.MULTILINE):
             # Get the line after this match to check for set name continuation
@@ -204,7 +204,7 @@ class handler(BaseHTTPRequestHandler):
         
         # Pattern 2: Standard format (no Bin prefix)
         # Matches: "1 CardName - #123 - R - Condition Magic - Set"
-        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s+#(\d+)\s+-\s+(\w+)\s+-\s+(.+?)\s+Magic\s+-\s+(.+?)$'
+        pattern_standard = r'^(\d+)\s+(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+(.+?)\s+Magic\s+-\s+(.+?)$'
         
         for match in re.finditer(pattern_standard, order_text, re.MULTILINE):
             condition = match.group(5).strip()
@@ -252,9 +252,8 @@ class handler(BaseHTTPRequestHandler):
         
         # Pattern 4: Extreme split case (card name on one line, Bin+qty on next)
         # Handles cases where condition might be split across 3 lines
-        # Include hyphen in card name pattern and prevent cross-line matches by excluding newlines
-        # Use ^ anchor to ensure we start at the beginning of a line
-        pattern_split = r'^([A-Z][\w ,\(\)\-]+?)\s+-\s#(\d+)\s+-\s+(\w+)\s+-\s+([A-Za-z ]+)$'
+        # Use a broad name matcher to include apostrophes and punctuation; allow collector numbers with slashes
+        pattern_split = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s+([A-Za-z ]+)$'
         
         for match in re.finditer(pattern_split, order_text, re.MULTILINE):
             match_end = match.end()
@@ -290,6 +289,42 @@ class handler(BaseHTTPRequestHandler):
                         'name': match.group(1).strip(),
                         'quantity': int(bin_match.group(1)),
                         'condition': full_condition,
+                        'setName': bin_match.group(2).strip(),
+                        'collectorNumber': match.group(2).strip(),
+                        'rarity': match.group(3).strip()
+                    })
+
+        # Pattern 5: Split case where condition is absent on first line (e.g., ends with '-')
+        # Example:
+        #   Mondrak, Glory Dominus (Oil Slick Raised Foil) - #346 - M -
+        #   Bin 8-T 1 Magic - Phyrexia: All Will Be One
+        #   Lightly Played Foil
+        pattern_split_no_cond = r'^(.+?)\s+-\s#(\d+(?:/\d+)?)\s+-\s+(\w+)\s+-\s*$'
+        for match in re.finditer(pattern_split_no_cond, order_text, re.MULTILINE):
+            match_end = match.end()
+            next_line_start = match_end + 1
+            next_line_end = order_text.find('\n', next_line_start)
+            if next_line_end == -1:
+                next_line_end = len(order_text)
+            next_line = order_text[next_line_start:next_line_end].strip()
+
+            bin_match = re.match(r'Bin\s+[\w\-]+\s+(\d+)\s+Magic\s+-\s+(.+)', next_line)
+            if bin_match:
+                # Condition expected on the following line
+                third_line_start = next_line_end + 1
+                third_line_end = order_text.find('\n', third_line_start)
+                if third_line_end == -1:
+                    third_line_end = len(order_text)
+                third_line = order_text[third_line_start:third_line_end].strip()
+                full_condition = third_line if third_line else ''
+
+                card_key = f"{match.group(1)}|{match.group(2)}|{full_condition}"
+                if card_key not in seen_cards:
+                    seen_cards.add(card_key)
+                    cards.append({
+                        'name': match.group(1).strip(),
+                        'quantity': int(bin_match.group(1)),
+                        'condition': full_condition.strip(),
                         'setName': bin_match.group(2).strip(),
                         'collectorNumber': match.group(2).strip(),
                         'rarity': match.group(3).strip()
