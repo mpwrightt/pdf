@@ -97,25 +97,39 @@ def release_sq(bot_id, sq_number):
         'message': f"Released SQ {sq_number}"
     }
 
-def reserve_refund_log_write(bot_id, sq_number, row_count):
-    """Reserve rows in Refund Log - returns starting row number"""
+def reserve_refund_log_write(bot_id, sq_number, row_count, current_last_row=1):
+    """
+    Reserve rows in Refund Log - returns starting row number
+
+    Args:
+        bot_id: Bot identifier (e.g., 'BOT1')
+        sq_number: SQ number being processed
+        row_count: Number of rows needed
+        current_last_row: Last used row from Refund Log sheet (passed by caller)
+
+    Returns:
+        Starting row number for this reservation
+    """
     clean_stale_claims()
 
-    # Calculate next available row based on existing reservations
-    # Start from row 2 (row 1 is header)
-    next_row = 2
+    # Calculate next available row based on:
+    # 1. Current last row in sheet (passed by caller)
+    # 2. Existing active reservations
+    next_row = current_last_row + 1
 
-    # Find highest reserved row
+    # Find highest reserved row from active reservations
     for reservation in _queue_storage['refund_reservations'].values():
-        end_row = reservation['startRow'] + reservation['rowCount']
-        if end_row > next_row:
-            next_row = end_row
+        if reservation.get('status') != 'COMPLETED':
+            end_row = reservation['startRow'] + reservation['rowCount']
+            if end_row > next_row:
+                next_row = end_row
 
     # Create reservation
     _queue_storage['refund_reservations'][sq_number] = {
         'botId': bot_id,
         'startRow': next_row,
         'rowCount': row_count,
+        'status': 'WRITING',
         'timestamp': datetime.now().isoformat()
     }
 
@@ -128,7 +142,7 @@ def reserve_refund_log_write(bot_id, sq_number, row_count):
     }
 
 def release_refund_log_write(bot_id, sq_number):
-    """Release Refund Log reservation"""
+    """Mark Refund Log reservation as completed (don't delete - helps with debugging)"""
     if sq_number not in _queue_storage['refund_reservations']:
         return {
             'success': False,
@@ -142,8 +156,9 @@ def release_refund_log_write(bot_id, sq_number):
             'message': f"Reservation for SQ {sq_number} owned by {reservation['botId']}, not {bot_id}"
         }
 
-    # Delete reservation
-    del _queue_storage['refund_reservations'][sq_number]
+    # Mark as completed (don't delete - helps calculate next row correctly)
+    _queue_storage['refund_reservations'][sq_number]['status'] = 'COMPLETED'
+    _queue_storage['refund_reservations'][sq_number]['completedAt'] = datetime.now().isoformat()
 
     return {
         'success': True,
@@ -204,7 +219,8 @@ class handler(BaseHTTPRequestHandler):
 
             elif action == 'reserveRefundLogWrite':
                 row_count = data.get('rowCount', 1)
-                result = reserve_refund_log_write(bot_id, sq_number, row_count)
+                current_last_row = data.get('currentLastRow', 1)
+                result = reserve_refund_log_write(bot_id, sq_number, row_count, current_last_row)
 
             elif action == 'releaseRefundLogWrite':
                 result = release_refund_log_write(bot_id, sq_number)

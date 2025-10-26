@@ -218,21 +218,36 @@ function releaseSQ(sqNumber) {
  * Reserve rows in Refund Log
  */
 function tryReserveRefundLogWrite(sqNumber, rowCount) {
-  const payload = {
-    action: 'reserveRefundLogWrite',
-    botId: CONFIG.BOT_ID,
-    sqNumber: sqNumber,
-    rowCount: rowCount
-  };
-
-  const options = {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
-
   try {
+    // Get current state from Refund Log
+    const refundLog = SpreadsheetApp.openById(CONFIG.REFUND_LOG_ID);
+    const refundSheet = refundLog.getSheetByName('Refund Log');
+    const queueSheet = refundLog.getSheetByName(CONFIG.REFUND_QUEUE_SHEET_NAME);
+
+    if (!queueSheet) {
+      throw new Error(`Queue sheet "${CONFIG.REFUND_QUEUE_SHEET_NAME}" not found in Refund Log`);
+    }
+
+    // Get current last row from actual data sheet
+    const currentLastRow = refundSheet.getLastRow();
+    Logger.log(`[${CONFIG.BOT_ID}] Current Refund Log last row: ${currentLastRow}`);
+
+    // Call Vercel to reserve rows
+    const payload = {
+      action: 'reserveRefundLogWrite',
+      botId: CONFIG.BOT_ID,
+      sqNumber: sqNumber,
+      rowCount: rowCount,
+      currentLastRow: currentLastRow
+    };
+
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+
     Logger.log(`[${CONFIG.BOT_ID}] Reserving ${rowCount} Refund Log rows via Vercel...`);
     const response = UrlFetchApp.fetch(CONFIG.VERCEL_QUEUE_URL, options);
     const result = JSON.parse(response.getContentText());
@@ -241,24 +256,19 @@ function tryReserveRefundLogWrite(sqNumber, rowCount) {
       const assignedRow = result.startRow;
       Logger.log(`[${CONFIG.BOT_ID}] ✓ Reserved Refund Log rows ${assignedRow}-${assignedRow + rowCount - 1}`);
 
-      // Also write to BOTS sheet for visibility
-      try {
-        const refundLog = SpreadsheetApp.openById(CONFIG.REFUND_LOG_ID);
-        const queueSheet = refundLog.getSheetByName(CONFIG.REFUND_QUEUE_SHEET_NAME);
-        if (queueSheet) {
-          const queueNextRow = queueSheet.getLastRow() + 1;
-          queueSheet.getRange(queueNextRow, 1, 1, 5).setValues([[
-            CONFIG.BOT_ID,
-            sqNumber,
-            assignedRow,
-            rowCount,
-            new Date()
-          ]]);
-        }
-      } catch (e) {
-        Logger.log(`[${CONFIG.BOT_ID}] Warning: Could not write to Refund BOTS sheet: ${e}`);
-      }
+      // Write reservation to BOTS sheet (source of truth)
+      const queueNextRow = queueSheet.getLastRow() + 1;
+      queueSheet.getRange(queueNextRow, 1, 1, 6).setValues([[
+        CONFIG.BOT_ID,
+        sqNumber,
+        assignedRow,
+        rowCount,
+        'WRITING',
+        new Date()
+      ]]);
+      SpreadsheetApp.flush();
 
+      Logger.log(`[${CONFIG.BOT_ID}] Recorded reservation in BOTS sheet at row ${queueNextRow}`);
       return assignedRow;
     } else {
       Logger.log(`[${CONFIG.BOT_ID}] ⚠️ Could not reserve Refund Log rows: ${result.message}`);
@@ -271,7 +281,7 @@ function tryReserveRefundLogWrite(sqNumber, rowCount) {
 }
 
 /**
- * Release Refund Log reservation
+ * Release Refund Log reservation (mark as COMPLETED)
  */
 function releaseRefundLogWrite(sqNumber) {
   const payload = {
@@ -294,16 +304,18 @@ function releaseRefundLogWrite(sqNumber) {
     if (result.success) {
       Logger.log(`[${CONFIG.BOT_ID}] ✓ Released Refund Log reservation`);
 
-      // Also delete from BOTS sheet
+      // Mark as COMPLETED in BOTS sheet (don't delete - helps with row calculation)
       try {
         const refundLog = SpreadsheetApp.openById(CONFIG.REFUND_LOG_ID);
         const queueSheet = refundLog.getSheetByName(CONFIG.REFUND_QUEUE_SHEET_NAME);
         if (queueSheet) {
           const data = queueSheet.getDataRange().getValues();
-          for (let i = data.length - 1; i >= 1; i--) {
+          for (let i = 1; i < data.length; i++) {
             const row = data[i];
-            if (row[0] === CONFIG.BOT_ID && row[1] === sqNumber) {
-              queueSheet.deleteRow(i + 1);
+            if (row[0] === CONFIG.BOT_ID && row[1] === sqNumber && row[4] === 'WRITING') {
+              queueSheet.getRange(i + 1, 5).setValue('COMPLETED');
+              SpreadsheetApp.flush();
+              Logger.log(`[${CONFIG.BOT_ID}] Marked reservation as COMPLETED in BOTS sheet`);
               break;
             }
           }

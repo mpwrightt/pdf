@@ -155,6 +155,7 @@ class handler(BaseHTTPRequestHandler):
             #   - CMR (military), HC (Highway Contract), RR (Rural Route)
             # Support name formats: "First Last", "Last, First", "R. Jeremy", "philip alston" (lowercase)
             # Address must have multiple tokens to avoid matching single order numbers or collector numbers
+            # Note: Requires at least 2 name parts to avoid false positives with single words
             name_pattern = r'([A-Za-z][A-Za-z\-]*\.?(?:[ \t,]+[A-Za-z]\'?[A-Za-z\-]*\.?)+)\s*\n\s*(?:(?:[A-Za-z0-9\-]+[ \t]+[A-Za-z0-9 \t]+)|(?:[Pp]\.?[Oo]\.?[ \t]+[Bb][Oo][Xx][ \t]+[\w\-]+)|(?:CMR[ \t]+\d+[ \t]+Box[ \t]+\d+)|(?:HC[ \t]+\d+[ \t]+BOX[ \t]+[\w\-]+)|(?:RR[ \t]+\d+[ \t]+Box[ \t]+[\w\-]+))'
 
             matches = list(re.finditer(name_pattern, shipping_text))

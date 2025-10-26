@@ -1,19 +1,27 @@
 # TCGplayer Discrepancy Refund Automation
 
-Automated workflow for processing refunds for missing cards in TCGplayer Direct inventory. The project combines a Google Apps Script automation with a Python-based PDF parser deployed on Vercel.
+Automated workflow for processing refunds for missing cards in TCGplayer Direct inventory. Uses Google Apps Script with a centralized queue service for concurrent bot coordination, plus a Python-based PDF parser deployed on Vercel.
 
-## Quick Start (New Agent)
+## Quick Start (Concurrent Bots)
 
-1. **Set up credentials**
-   - Duplicate the Helper Sheet, Discrepancy Log, and Refund Log to your sandbox.
-   - In the Helper Sheet script editor run `source ~/.zshrc` locally and `coderabbit auth login` (see Archon workflow).
-2. **Deploy parser locally (optional)**
-   - `pip install -r pdf-parser-server/requirements.txt`
-   - `python pdf-parser-server/api/parse.py` can be imported locally for testing.
-3. **Run the Apps Script**
-   - Open `scripts/HelperDocAutomation.gs` and execute the `uploadPdfAndMatch()` menu flow (`🤖 Refund Tools > 2️⃣ Upload SQ PDF`).
-4. **Verify results**
-   - Check execution logs for `Matched!` lines and confirm the Helper sheet populated Direct Order # / Buyer Name.
+### ✅ Queue Manager Already Deployed
+
+The centralized Queue Manager Web App is deployed at:
+```
+https://script.google.com/a/macros/ebay.com/s/AKfycbwrLg1hD-_d4LA4iky6VGYTUCYuJeUbHZbfyN7KWX4MzK98pzp1HOR3TxVqt7__R8higA/exec
+```
+
+### To Add a New Bot (BOT4, BOT5, etc.)
+
+1. **Clone a Helper Doc** - Duplicate BOT1's Helper Doc
+2. **Deploy the script** - Extensions → Apps Script → Copy `scripts/HelperDocAutomation.gs`
+3. **Change BOT_ID** - Update line 14: `BOT_ID: 'BOT4',` (must be unique!)
+4. **Save** - Ctrl+S / Cmd+S
+5. **Test** - Run "🤖 Refund Tools > 1️⃣ Claim Next SQ"
+
+### Full Deployment Guide
+
+See **[DEPLOY_CENTRALIZED_QUEUE.md](DEPLOY_CENTRALIZED_QUEUE.md)** for complete setup instructions.
 
 ## Overview
 
