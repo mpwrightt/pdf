@@ -26,23 +26,38 @@ def call_convex(function_name, args):
         }
 
     try:
-        url = f'{CONVEX_URL}/api/mutation/{function_name}' if 'mutation' in function_name else f'{CONVEX_URL}/api/query/{function_name}'
+        # Determine if mutation or query
+        is_mutation = function_name in ['queue:tryClaimSQ', 'queue:releaseSQ', 'queue:reserveRefundLogWrite', 'queue:releaseRefundLogWrite']
 
-        # For mutations, use the mutation endpoint
-        if function_name in ['queue:tryClaimSQ', 'queue:releaseSQ', 'queue:reserveRefundLogWrite', 'queue:releaseRefundLogWrite']:
-            url = f'{CONVEX_URL}/api/mutation/{function_name}'
-        else:
-            url = f'{CONVEX_URL}/api/query/{function_name}'
+        # Convex HTTP API endpoint
+        endpoint = 'mutation' if is_mutation else 'query'
+        url = f'{CONVEX_URL.rstrip("/")}/api/{endpoint}'
+
+        # Convex expects args as object, not array
+        payload = {
+            'path': function_name,
+            'args': args if args else {},
+            'format': 'json'
+        }
 
         response = requests.post(
             url,
             headers={'Content-Type': 'application/json'},
-            json={'args': args} if args else {},
+            json=payload,
             timeout=10
         )
 
         if response.status_code == 200:
-            return response.json()
+            result = response.json()
+            # Convex wraps the result in a 'value' field and status
+            if result.get('status') == 'success' and 'value' in result:
+                return result['value']
+            elif result.get('status') == 'error':
+                return {
+                    'success': False,
+                    'error': f"Convex error: {result.get('message', 'Unknown error')}"
+                }
+            return result
         else:
             return {
                 'success': False,
