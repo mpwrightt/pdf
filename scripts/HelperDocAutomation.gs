@@ -503,91 +503,34 @@ function pullUnclaimedItems() {
         continue; // Another bot reserved it first - try next SQ
       }
 
-      Logger.log(`✓ Successfully reserved SQ ${selectedSQ} in queue - proceeding to claim...`);
+      Logger.log(`✓ Convex reserved SQ ${selectedSQ} - claiming rows in Discrepancy Log...`);
 
-      // 🔒 FINAL CHECK: Verify still unclaimed before actually claiming
-      const firstRowInitials = discrepSheet.getRange(itemsForSQ[0].rowIndex, CONFIG.DISCREP_COLS.INITIALS + 1).getValue();
-
-      if (firstRowInitials) {
-        Logger.log(`⚠️ SQ ${selectedSQ} was claimed by '${firstRowInitials}' after queue reservation - releasing and trying next SQ`);
-        releaseSQ(selectedSQ);
-        continue;
-      }
-
-      Logger.log(`✓ Final check passed - proceeding to claim immediately...`);
-
-      // 🔒 ATOMIC CLAIM: Try to claim rows, then verify we won the race
+      // 🔒 ATOMIC CLAIM: Convex already reserved this SQ for us, just write to sheet
       const now = new Date();
 
       try {
-        // Step 1: Claim all rows
-        const rowsToUpdate = [];
-        for (const item of itemsForSQ) {
-          rowsToUpdate.push({
-            row: item.rowIndex,
-            item: item
-          });
-        }
-
-        Logger.log(`Claiming ${rowsToUpdate.length} rows...`);
+        // Claim all rows (no verification needed - Convex guarantees we won)
+        Logger.log(`Claiming ${itemsForSQ.length} rows...`);
 
         let claimedCount = 0;
-        for (const update of rowsToUpdate) {
-          discrepSheet.getRange(update.row, CONFIG.DISCREP_COLS.INITIALS + 1).setValue(CONFIG.BOT_ID);
-          discrepSheet.getRange(update.row, CONFIG.DISCREP_COLS.RESOLUTION_TYPE + 1).setValue('Missing Note');
-          discrepSheet.getRange(update.row, CONFIG.DISCREP_COLS.SOLVE_DATE + 1).setValue(now);
+        for (const item of itemsForSQ) {
+          discrepSheet.getRange(item.rowIndex, CONFIG.DISCREP_COLS.INITIALS + 1).setValue(CONFIG.BOT_ID);
+          discrepSheet.getRange(item.rowIndex, CONFIG.DISCREP_COLS.RESOLUTION_TYPE + 1).setValue('Missing Note');
+          discrepSheet.getRange(item.rowIndex, CONFIG.DISCREP_COLS.SOLVE_DATE + 1).setValue(now);
           claimedCount++;
 
           if (claimedCount % 10 === 0) {
-            Logger.log(`  Claimed ${claimedCount}/${rowsToUpdate.length} rows...`);
+            Logger.log(`  Claimed ${claimedCount}/${itemsForSQ.length} rows...`);
           }
         }
 
-        Logger.log(`✓ Claimed ${rowsToUpdate.length} row(s) for SQ ${selectedSQ}`);
+        SpreadsheetApp.flush(); // Ensure writes are committed
 
-        // Step 2: Wait 10 seconds to let other bots/humans finish writing
-        Logger.log(`Waiting 10 seconds before verification...`);
-        Utilities.sleep(10000);
+        Logger.log(`✓ Claimed ${itemsForSQ.length} row(s) for SQ ${selectedSQ}`);
 
-        // Step 3: Verify which claims actually succeeded
-        Logger.log(`Verifying claims...`);
-        const verifiedItems = [];
-        const initialsColumn = CONFIG.DISCREP_COLS.INITIALS + 1;
-        const initialsToCheck = [];
-
-        for (const update of rowsToUpdate) {
-          const value = discrepSheet.getRange(update.row, initialsColumn).getValue();
-          initialsToCheck.push(value);
-        }
-
-        for (let i = 0; i < rowsToUpdate.length; i++) {
-          const actualInitials = initialsToCheck[i];
-          const item = rowsToUpdate[i].item;
-
-          if (actualInitials === CONFIG.BOT_ID) {
-            verifiedItems.push(item);
-          } else {
-            Logger.log(`⚠️ Lost race for row ${rowsToUpdate[i].row} - claimed by '${actualInitials}'`);
-          }
-        }
-
-        Logger.log(`✓ Successfully verified ${verifiedItems.length} of ${rowsToUpdate.length} attempted claims`);
-
-        if (verifiedItems.length === 0) {
-          // We lost the race - try the next SQ
-          Logger.log(`⚠️ Lost race for SQ ${selectedSQ} - trying next SQ...`);
-          // Release queue reservation before trying next SQ
-          releaseSQ(selectedSQ);
-          selectedSQ = null;
-          itemsForSQ = [];
-          continue; // Try next SQ in the loop
-        }
-
-        // Success! Update itemsForSQ to only verified items
-        itemsForSQ.length = 0;
-        itemsForSQ.push(...verifiedItems);
+        // Success! Convex guaranteed this was ours
         claimSuccessful = true;
-        Logger.log(`🎉 Successfully claimed SQ ${selectedSQ} with ${verifiedItems.length} rows!`);
+        Logger.log(`🎉 Successfully claimed SQ ${selectedSQ} with ${itemsForSQ.length} rows!`);
 
         // Release queue reservation (we successfully claimed it)
         releaseSQ(selectedSQ);
@@ -1263,45 +1206,19 @@ function writeToRefundLog(items) {
         return row;
       });
 
-      // Write to sheet
+      // Write to sheet (Convex already reserved these rows for us)
       refundSheet.getRange(nextRow, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
       // Ensure column A displays as date
       refundSheet.getRange(nextRow, 1, rowsToWrite.length, 1).setNumberFormat('m/d/yyyy');
+      SpreadsheetApp.flush(); // Ensure writes are committed
 
       Logger.log(`✓ Wrote ${rowsToWrite.length} rows starting at row ${nextRow}`);
 
-      // Wait 10 seconds to let other bots finish writing
-      Logger.log(`Waiting 10 seconds before verification...`);
-      Utilities.sleep(10000);
+      // Success! Convex guaranteed these rows were ours
+      writeSuccessful = true;
 
-      // Verify: Check if our data is still there
-      const verifyRange = refundSheet.getRange(nextRow, CONFIG.REFUND_COLS.SQ_NUMBER + 1, rowsToWrite.length, 1);
-      const verifyData = verifyRange.getValues();
-
-      let allRowsVerified = true;
-      for (let i = 0; i < verifyData.length; i++) {
-        const expectedSQ = items[i].sqNumber;
-        const actualSQ = verifyData[i][0];
-
-        if (actualSQ !== expectedSQ) {
-          Logger.log(`⚠️ Verification failed at row ${nextRow + i}: expected SQ ${expectedSQ}, found ${actualSQ}`);
-          allRowsVerified = false;
-          break;
-        }
-      }
-
-      if (allRowsVerified) {
-        Logger.log(`✓ All ${rowsToWrite.length} rows verified successfully!`);
-        writeSuccessful = true;
-        // Release queue reservation after successful write
-        releaseRefundLogWrite(sqNumber);
-      } else {
-        Logger.log(`⚠️ Verification failed - another bot overwrote our data. Retrying...`);
-        // Release queue reservation before retry
-        releaseRefundLogWrite(sqNumber);
-        // Wait 10 seconds before retry to let other bot finish
-        Utilities.sleep(10000);
-      }
+      // Release queue reservation after successful write
+      releaseRefundLogWrite(sqNumber);
 
     } catch (e) {
       Logger.log(`ERROR during write attempt ${attemptCount}: ${e}`);
