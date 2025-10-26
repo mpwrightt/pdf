@@ -53,17 +53,36 @@ export const tryClaimSQ = mutation({
     // Clean up stale claims first
     await cleanupStaleClaims(ctx, {});
 
-    // Check if already claimed
-    const existing = await ctx.db
+    // Check if already claimed (get ALL claims for this SQ, not just first)
+    const existingClaims = await ctx.db
       .query("sq_claims")
       .withIndex("by_sq_number", (q) => q.eq("sqNumber", args.sqNumber))
-      .first();
+      .collect();
 
-    if (existing && existing.status === "CLAIMING") {
+    // Check for any active claims (CLAIMING status)
+    const activeClaim = existingClaims.find(c => c.status === "CLAIMING");
+    if (activeClaim) {
       return {
         success: false,
-        message: `SQ ${args.sqNumber} already claimed by ${existing.botId}`,
-        claimedBy: existing.botId,
+        message: `SQ ${args.sqNumber} already claimed by ${activeClaim.botId}`,
+        claimedBy: activeClaim.botId,
+      };
+    }
+
+    // Check for recent COMPLETED claims (within last 60 seconds)
+    // This prevents race condition where BOT1 completes and BOT2 tries to claim immediately
+    const now = Date.now();
+    const recentCompleted = existingClaims.find(c =>
+      c.status === "COMPLETED" &&
+      c.completedAt &&
+      (now - c.completedAt) < 60000
+    );
+
+    if (recentCompleted) {
+      return {
+        success: false,
+        message: `SQ ${args.sqNumber} was recently completed by ${recentCompleted.botId}`,
+        claimedBy: recentCompleted.botId,
       };
     }
 
