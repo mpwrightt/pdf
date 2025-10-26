@@ -2,6 +2,9 @@
   "functions": {
     "api/parse.py": {
       "maxDuration": 60
+    },
+    "api/queue.py": {
+      "maxDuration": 10
     }
   }
 }

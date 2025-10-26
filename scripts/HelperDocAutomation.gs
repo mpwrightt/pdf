@@ -10,13 +10,21 @@
 
 // Configuration
 const CONFIG = {
+  // ⚙️ IMPORTANT: Change BOT_ID for each cloned helper doc (e.g., 'BOT1', 'BOT2', 'BOT3')
+  BOT_ID: 'BOT1',
+
   VERCEL_API_URL: 'https://pdf-nine-psi.vercel.app/api/parse',
-  
+  VERCEL_QUEUE_URL: 'https://pdf-nine-psi.vercel.app/api/queue',
+
   // Discrepancy Log
   DISCREP_LOG_ID: '1m0dSOA2VogToEpAo6Jj7FEEsfJbWi1W48xiyTHkBNyY',
-  
+
   // Refund Log
   REFUND_LOG_ID: '1raaUEsPoMl5dEZwilnHtBwdR0wOV2JRqYzdlVYMdohI',
+
+  // Bot Queue Sheets (for coordinating concurrent bots)
+  DISCREP_QUEUE_SHEET_NAME: 'BOTS',  // In Discrepancy Log - for SQ claiming coordination
+  REFUND_QUEUE_SHEET_NAME: 'BOTS',   // In Refund Log - for write coordination
   
   // Discrepancy Log Columns (based on actual sheet layout)
   DISCREP_COLS: {
@@ -95,22 +103,224 @@ function normalizeCollector(num) {
 }
 
 /**
- * Creates custom menu when spreadsheet opens
-{{ ... }}
+ * Queue Management Functions (Vercel API)
+ * Uses Vercel serverless API for coordination across all Helper Docs.
+ * Works for multi-user scenarios - no Google auth required.
  */
-function onOpen() {
-  const ui = SpreadsheetApp.getUi();
-  ui.createMenu('🤖 Refund Tools')
-    .addItem('1️⃣ Pull Unclaimed Items', 'pullUnclaimedItems')
-    .addSeparator()
-    .addItem('2️⃣ Upload SQ PDF', 'showUploadDialog')
-    .addSeparator()
-    .addItem('3️⃣ Send to Refund Log', 'sendToRefundLog')
-    .addSeparator()
-    .addItem('🧮 Reset Counters', 'resetCounters')
-    .addSeparator()
-    .addItem('🗑️ Clear Helper Sheet', 'clearHelperSheet')
-    .addToUi();
+
+/**
+ * Try to reserve an SQ using Vercel Queue API
+ */
+function tryReserveSQ(sqNumber) {
+  const payload = {
+    action: 'tryClaimSQ',
+    botId: CONFIG.BOT_ID,
+    sqNumber: sqNumber
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  try {
+    Logger.log(`[${CONFIG.BOT_ID}] Attempting to claim SQ ${sqNumber} via Vercel...`);
+    const response = UrlFetchApp.fetch(CONFIG.VERCEL_QUEUE_URL, options);
+    const result = JSON.parse(response.getContentText());
+
+    if (result.success) {
+      Logger.log(`[${CONFIG.BOT_ID}] ✓ Reserved SQ ${sqNumber} via Vercel queue`);
+
+      // Also write to BOTS sheet for visibility
+      try {
+        const discrepLog = SpreadsheetApp.openById(CONFIG.DISCREP_LOG_ID);
+        const queueSheet = discrepLog.getSheetByName(CONFIG.DISCREP_QUEUE_SHEET_NAME);
+        if (queueSheet) {
+          const nextRow = queueSheet.getLastRow() + 1;
+          queueSheet.getRange(nextRow, 1, 1, 4).setValues([[
+            CONFIG.BOT_ID,
+            sqNumber,
+            'CLAIMING',
+            new Date()
+          ]]);
+        }
+      } catch (e) {
+        Logger.log(`[${CONFIG.BOT_ID}] Warning: Could not write to BOTS sheet: ${e}`);
+      }
+
+      return true;
+    } else {
+      Logger.log(`[${CONFIG.BOT_ID}] ⚠️ Could not claim SQ ${sqNumber}: ${result.message}`);
+      return false;
+    }
+  } catch (e) {
+    Logger.log(`[${CONFIG.BOT_ID}] ERROR calling Vercel queue: ${e}`);
+    return false;
+  }
+}
+
+/**
+ * Release an SQ reservation
+ */
+function releaseSQ(sqNumber) {
+  const payload = {
+    action: 'releaseSQ',
+    botId: CONFIG.BOT_ID,
+    sqNumber: sqNumber
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(CONFIG.VERCEL_QUEUE_URL, options);
+    const result = JSON.parse(response.getContentText());
+
+    if (result.success) {
+      Logger.log(`[${CONFIG.BOT_ID}] ✓ Released SQ ${sqNumber} from Vercel queue`);
+
+      // Also update BOTS sheet for visibility
+      try {
+        const discrepLog = SpreadsheetApp.openById(CONFIG.DISCREP_LOG_ID);
+        const queueSheet = discrepLog.getSheetByName(CONFIG.DISCREP_QUEUE_SHEET_NAME);
+        if (queueSheet) {
+          const data = queueSheet.getDataRange().getValues();
+          for (let i = 1; i < data.length; i++) {
+            const row = data[i];
+            if (row[0] === CONFIG.BOT_ID && row[1] === sqNumber) {
+              queueSheet.getRange(i + 1, 3).setValue('COMPLETED');
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        Logger.log(`[${CONFIG.BOT_ID}] Warning: Could not update BOTS sheet: ${e}`);
+      }
+
+      return true;
+    } else {
+      Logger.log(`[${CONFIG.BOT_ID}] ⚠️ Could not release SQ ${sqNumber}: ${result.message}`);
+      return false;
+    }
+  } catch (e) {
+    Logger.log(`[${CONFIG.BOT_ID}] Warning: Could not release SQ ${sqNumber}: ${e}`);
+    return false;
+  }
+}
+
+/**
+ * Reserve rows in Refund Log
+ */
+function tryReserveRefundLogWrite(sqNumber, rowCount) {
+  const payload = {
+    action: 'reserveRefundLogWrite',
+    botId: CONFIG.BOT_ID,
+    sqNumber: sqNumber,
+    rowCount: rowCount
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  try {
+    Logger.log(`[${CONFIG.BOT_ID}] Reserving ${rowCount} Refund Log rows via Vercel...`);
+    const response = UrlFetchApp.fetch(CONFIG.VERCEL_QUEUE_URL, options);
+    const result = JSON.parse(response.getContentText());
+
+    if (result.success) {
+      const assignedRow = result.startRow;
+      Logger.log(`[${CONFIG.BOT_ID}] ✓ Reserved Refund Log rows ${assignedRow}-${assignedRow + rowCount - 1}`);
+
+      // Also write to BOTS sheet for visibility
+      try {
+        const refundLog = SpreadsheetApp.openById(CONFIG.REFUND_LOG_ID);
+        const queueSheet = refundLog.getSheetByName(CONFIG.REFUND_QUEUE_SHEET_NAME);
+        if (queueSheet) {
+          const queueNextRow = queueSheet.getLastRow() + 1;
+          queueSheet.getRange(queueNextRow, 1, 1, 5).setValues([[
+            CONFIG.BOT_ID,
+            sqNumber,
+            assignedRow,
+            rowCount,
+            new Date()
+          ]]);
+        }
+      } catch (e) {
+        Logger.log(`[${CONFIG.BOT_ID}] Warning: Could not write to Refund BOTS sheet: ${e}`);
+      }
+
+      return assignedRow;
+    } else {
+      Logger.log(`[${CONFIG.BOT_ID}] ⚠️ Could not reserve Refund Log rows: ${result.message}`);
+      return null;
+    }
+  } catch (e) {
+    Logger.log(`[${CONFIG.BOT_ID}] ERROR: Failed to reserve Refund Log rows: ${e}`);
+    return null;
+  }
+}
+
+/**
+ * Release Refund Log reservation
+ */
+function releaseRefundLogWrite(sqNumber) {
+  const payload = {
+    action: 'releaseRefundLogWrite',
+    botId: CONFIG.BOT_ID,
+    sqNumber: sqNumber
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(CONFIG.VERCEL_QUEUE_URL, options);
+    const result = JSON.parse(response.getContentText());
+
+    if (result.success) {
+      Logger.log(`[${CONFIG.BOT_ID}] ✓ Released Refund Log reservation`);
+
+      // Also delete from BOTS sheet
+      try {
+        const refundLog = SpreadsheetApp.openById(CONFIG.REFUND_LOG_ID);
+        const queueSheet = refundLog.getSheetByName(CONFIG.REFUND_QUEUE_SHEET_NAME);
+        if (queueSheet) {
+          const data = queueSheet.getDataRange().getValues();
+          for (let i = data.length - 1; i >= 1; i--) {
+            const row = data[i];
+            if (row[0] === CONFIG.BOT_ID && row[1] === sqNumber) {
+              queueSheet.deleteRow(i + 1);
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        Logger.log(`[${CONFIG.BOT_ID}] Warning: Could not update Refund BOTS sheet: ${e}`);
+      }
+
+      return true;
+    } else {
+      Logger.log(`[${CONFIG.BOT_ID}] ⚠️ Could not release Refund Log reservation: ${result.message}`);
+      return false;
+    }
+  } catch (e) {
+    Logger.log(`[${CONFIG.BOT_ID}] Warning: Could not release Refund Log reservation: ${e}`);
+    return false;
+  }
 }
 
 /**
@@ -118,7 +328,7 @@ function onOpen() {
  */
 function pullUnclaimedItems() {
   const ui = SpreadsheetApp.getUi();
-  
+
   try {
     // Get Discrepancy Log
     const discrepLog = SpreadsheetApp.openById(CONFIG.DISCREP_LOG_ID);
@@ -136,8 +346,6 @@ function pullUnclaimedItems() {
     
     Logger.log('Getting values...');
     const data = dataRange.getValues();
-    Logger.log('Getting background colors...');
-    const backgrounds = dataRange.getBackgrounds();
     Logger.log(`Total rows in sheet: ${data.length}`);
     Logger.log(`Total columns: ${data[0] ? data[0].length : 0}`);
     Logger.log(`Checking columns - Initials: ${CONFIG.DISCREP_COLS.INITIALS}, SolveDate: ${CONFIG.DISCREP_COLS.SOLVE_DATE}, Manual: ${CONFIG.DISCREP_COLS.MANUAL_INTERVENTION}`);
@@ -147,59 +355,39 @@ function pullUnclaimedItems() {
     const GAME_IDX = headerGameIdx >= 0 ? headerGameIdx : CONFIG.DISCREP_COLS.GAME;
     Logger.log(`Detected Game column index: ${GAME_IDX} (header: ${header[GAME_IDX]})`);
     
-    // Find unclaimed items: no initials, no solve date, not red, not in vault
+    // Find unclaimed items: no initials, no solve date, not in vault
     const unclaimedItems = [];
     let debugCount = 0;
-    
+
     Logger.log(`Starting to scan ${data.length - 1} data rows...`);
-    Logger.log(`Filter criteria: No initials + No solve date + Not red + Not in vault`);
-    
+    Logger.log(`Filter criteria: No initials + No solve date + Not in vault`);
+
     let skipCounts = {
       hasInitials: 0,
       hasSolveDate: 0,
       hasManual: 0,
-      isRed: 0,
       hasNoneLocation: 0
     };
     
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       const initials = row[CONFIG.DISCREP_COLS.INITIALS];
-      const resolutionType = row[CONFIG.DISCREP_COLS.RESOLUTION_TYPE];
       const solveDate = row[CONFIG.DISCREP_COLS.SOLVE_DATE];
       const manualIntervention = row[CONFIG.DISCREP_COLS.MANUAL_INTERVENTION];
       const locationId = row[CONFIG.DISCREP_COLS.LOCATION_ID];
       const sqNumber = row[CONFIG.DISCREP_COLS.SQ_NUMBER];
-      const sqBackgroundColor = backgrounds[i][CONFIG.DISCREP_COLS.SQ_NUMBER];
-      
+
       // Log first 5 rows for debugging
       if (debugCount < 5) {
-        Logger.log(`Row ${i}: SQ=${sqNumber}, Initials='${initials}', ResType='${resolutionType}', SolveDate='${solveDate}', Manual='${manualIntervention}', BgColor='${sqBackgroundColor}'`);
+        Logger.log(`Row ${i}: SQ=${sqNumber}, Initials='${initials}', SolveDate='${solveDate}', Manual='${manualIntervention}'`);
         debugCount++;
       }
-      
-      // Check if SQ Number has red background (skip if red)
-      // Red in Sheets is typically #ff0000, #ff0001, etc.
-      const colorLower = sqBackgroundColor ? sqBackgroundColor.toLowerCase() : '';
-      const isRedBackground = colorLower && (
-        colorLower.startsWith('#ff0000') ||
-        colorLower.startsWith('#ff0001') ||
-        colorLower === '#f00' ||
-        colorLower.includes('rgb(255, 0, 0') ||
-        colorLower === 'red'
-      );
-      
-      // Track why items are skipped
-      // Filter logic: no initials, no solve date, not red, not in vault, not "NONE" location
+
+      // Filter logic: no initials, no solve date, not in vault, not "NONE" location
       if (initials) {
         skipCounts.hasInitials++;
       } else if (solveDate) {
         skipCounts.hasSolveDate++;
-      } else if (isRedBackground) {
-        skipCounts.isRed++;
-        if (skipCounts.isRed === 1) {
-          Logger.log(`First red background found at row ${i}: color='${sqBackgroundColor}'`);
-        }
       } else if (manualIntervention) {
         skipCounts.hasManual++;
       } else if (locationId && locationId.toString().toUpperCase() === 'NONE') {
@@ -225,18 +413,16 @@ function pullUnclaimedItems() {
     Logger.log(`\nSkip breakdown:`);
     Logger.log(`  - Has initials (claimed): ${skipCounts.hasInitials}`);
     Logger.log(`  - Has solve date (already solved): ${skipCounts.hasSolveDate}`);
-    Logger.log(`  - Red background (needs attention): ${skipCounts.isRed}`);
     Logger.log(`  - Has manual intervention flag (in vault): ${skipCounts.hasManual}`);
     Logger.log(`  - Location is "NONE": ${skipCounts.hasNoneLocation}`);
-    
+
     if (unclaimedItems.length === 0) {
       Logger.log('\nNo items matched ALL criteria. Check skip breakdown above.');
       ui.alert(
-        'No Unclaimed Items', 
+        'No Unclaimed Items',
         `No unclaimed items found.\n\nSkipped:\n` +
         `- Has initials: ${skipCounts.hasInitials}\n` +
         `- Has solve date: ${skipCounts.hasSolveDate}\n` +
-        `- Red background: ${skipCounts.isRed}\n` +
         `- In vault: ${skipCounts.hasManual}\n` +
         `- Location "NONE": ${skipCounts.hasNoneLocation}\n\n` +
         `Check Extensions > Apps Script > Executions for details.`,
@@ -245,40 +431,176 @@ function pullUnclaimedItems() {
       return;
     }
     
-    // Auto-select first unclaimed SQ
-    const uniqueSQs = [...new Set(unclaimedItems.map(item => item.sqNumber))];
-    
-    if (uniqueSQs.length === 0) {
-      ui.alert('No Items', 'No unclaimed items found.', ui.ButtonSet.OK);
-      return;
-    }
-    
-    // Automatically select the first SQ
-    const selectedSQ = uniqueSQs[0];
-    Logger.log(`Auto-selected first unclaimed SQ: ${selectedSQ} (${uniqueSQs.length} total unclaimed SQs)`);
-    
-    // Filter items for selected SQ
-    const itemsForSQ = unclaimedItems.filter(item => item.sqNumber === selectedSQ);
-    
-    if (itemsForSQ.length === 0) {
-      ui.alert('Not Found', `No items found for SQ: ${selectedSQ}`, ui.ButtonSet.OK);
-      return;
-    }
-    
-    // Claim the selected items in the Discrepancy Log: set Initials = 'BOT', Resolution Type = 'Missing Note', and Solve Date = today
-    try {
-      const now = new Date();
-      let claimed = 0;
-      for (const item of itemsForSQ) {
-        // Initials (O), Resolution Type (P), and Solve Date (R)
-        discrepSheet.getRange(item.rowIndex, CONFIG.DISCREP_COLS.INITIALS + 1).setValue('BOT');
-        discrepSheet.getRange(item.rowIndex, CONFIG.DISCREP_COLS.RESOLUTION_TYPE + 1).setValue('Missing Note');
-        discrepSheet.getRange(item.rowIndex, CONFIG.DISCREP_COLS.SOLVE_DATE + 1).setValue(now);
-        claimed++;
+    // Find first SQ that is FULLY unclaimed (all rows for that SQ have no initials)
+    // Strategy: Work sequentially through unclaimed SQs
+    const uniqueUnclaimedSQs = [...new Set(unclaimedItems.map(item => item.sqNumber))];
+
+    let selectedSQ = null;
+    let itemsForSQ = [];
+
+    Logger.log(`Checking ${uniqueUnclaimedSQs.length} unique unclaimed SQ(s) for full availability...`);
+
+    // 🔁 RETRY LOOP: Keep trying SQs until we successfully claim one
+    let claimSuccessful = false;
+
+    for (const sqNumber of uniqueUnclaimedSQs) {
+      // Quick check: is this SQ partially claimed?
+      // We scan ONLY rows for this specific SQ and break early if we find initials
+      let hasClaimedRows = false;
+
+      for (let i = 1; i < data.length; i++) {
+        const row = data[i];
+        const rowSQ = row[CONFIG.DISCREP_COLS.SQ_NUMBER];
+
+        // Skip if not the SQ we're checking
+        if (rowSQ !== sqNumber) continue;
+
+        const initials = row[CONFIG.DISCREP_COLS.INITIALS];
+        const locationId = row[CONFIG.DISCREP_COLS.LOCATION_ID];
+        const solveDate = row[CONFIG.DISCREP_COLS.SOLVE_DATE];
+        const manualIntervention = row[CONFIG.DISCREP_COLS.MANUAL_INTERVENTION];
+
+        // Skip rows with NONE location (they don't count)
+        if (locationId && locationId.toString().toUpperCase() === 'NONE') continue;
+
+        // Skip rows already filtered (solve date or manual intervention)
+        if (solveDate || manualIntervention) continue;
+
+        // Check if this row is claimed
+        if (initials) {
+          hasClaimedRows = true;
+          Logger.log(`⚠️ Skipping partially claimed SQ: ${sqNumber} (found initials='${initials}' at row ${i + 1})`);
+          break; // Stop scanning this SQ
+        }
       }
-      Logger.log(`Claimed ${claimed} row(s) in Discrepancy Log for SQ ${selectedSQ} (Initials='BOT', Resolution='Missing Note', Solve Date=${now.toDateString()}).`);
-    } catch (e) {
-      Logger.log(`WARNING: Failed to claim items for SQ ${selectedSQ}: ${e}`);
+
+      if (hasClaimedRows) {
+        // Skip this SQ and try the next one
+        continue;
+      }
+
+      // This SQ is fully unclaimed - try to reserve it in the queue!
+      selectedSQ = sqNumber;
+      itemsForSQ = unclaimedItems.filter(item => item.sqNumber === selectedSQ);
+
+      Logger.log(`✓ Found fully unclaimed SQ: ${selectedSQ} (${itemsForSQ.length} rows) - attempting queue reservation...`);
+
+      // 🔒 QUEUE RESERVATION: Try to reserve this SQ in the queue
+      if (!tryReserveSQ(selectedSQ)) {
+        Logger.log(`⚠️ Failed to reserve SQ ${selectedSQ} in queue - trying next SQ...`);
+        continue; // Another bot reserved it first - try next SQ
+      }
+
+      Logger.log(`✓ Successfully reserved SQ ${selectedSQ} in queue - proceeding to claim...`);
+
+      // 🔒 FINAL CHECK: Verify still unclaimed before actually claiming
+      const firstRowInitials = discrepSheet.getRange(itemsForSQ[0].rowIndex, CONFIG.DISCREP_COLS.INITIALS + 1).getValue();
+
+      if (firstRowInitials) {
+        Logger.log(`⚠️ SQ ${selectedSQ} was claimed by '${firstRowInitials}' after queue reservation - releasing and trying next SQ`);
+        releaseSQ(selectedSQ);
+        continue;
+      }
+
+      Logger.log(`✓ Final check passed - proceeding to claim immediately...`);
+
+      // 🔒 ATOMIC CLAIM: Try to claim rows, then verify we won the race
+      const now = new Date();
+
+      try {
+        // Step 1: Claim all rows
+        const rowsToUpdate = [];
+        for (const item of itemsForSQ) {
+          rowsToUpdate.push({
+            row: item.rowIndex,
+            item: item
+          });
+        }
+
+        Logger.log(`Claiming ${rowsToUpdate.length} rows...`);
+
+        let claimedCount = 0;
+        for (const update of rowsToUpdate) {
+          discrepSheet.getRange(update.row, CONFIG.DISCREP_COLS.INITIALS + 1).setValue(CONFIG.BOT_ID);
+          discrepSheet.getRange(update.row, CONFIG.DISCREP_COLS.RESOLUTION_TYPE + 1).setValue('Missing Note');
+          discrepSheet.getRange(update.row, CONFIG.DISCREP_COLS.SOLVE_DATE + 1).setValue(now);
+          claimedCount++;
+
+          if (claimedCount % 10 === 0) {
+            Logger.log(`  Claimed ${claimedCount}/${rowsToUpdate.length} rows...`);
+          }
+        }
+
+        Logger.log(`✓ Claimed ${rowsToUpdate.length} row(s) for SQ ${selectedSQ}`);
+
+        // Step 2: Wait 10 seconds to let other bots/humans finish writing
+        Logger.log(`Waiting 10 seconds before verification...`);
+        Utilities.sleep(10000);
+
+        // Step 3: Verify which claims actually succeeded
+        Logger.log(`Verifying claims...`);
+        const verifiedItems = [];
+        const initialsColumn = CONFIG.DISCREP_COLS.INITIALS + 1;
+        const initialsToCheck = [];
+
+        for (const update of rowsToUpdate) {
+          const value = discrepSheet.getRange(update.row, initialsColumn).getValue();
+          initialsToCheck.push(value);
+        }
+
+        for (let i = 0; i < rowsToUpdate.length; i++) {
+          const actualInitials = initialsToCheck[i];
+          const item = rowsToUpdate[i].item;
+
+          if (actualInitials === CONFIG.BOT_ID) {
+            verifiedItems.push(item);
+          } else {
+            Logger.log(`⚠️ Lost race for row ${rowsToUpdate[i].row} - claimed by '${actualInitials}'`);
+          }
+        }
+
+        Logger.log(`✓ Successfully verified ${verifiedItems.length} of ${rowsToUpdate.length} attempted claims`);
+
+        if (verifiedItems.length === 0) {
+          // We lost the race - try the next SQ
+          Logger.log(`⚠️ Lost race for SQ ${selectedSQ} - trying next SQ...`);
+          // Release queue reservation before trying next SQ
+          releaseSQ(selectedSQ);
+          selectedSQ = null;
+          itemsForSQ = [];
+          continue; // Try next SQ in the loop
+        }
+
+        // Success! Update itemsForSQ to only verified items
+        itemsForSQ.length = 0;
+        itemsForSQ.push(...verifiedItems);
+        claimSuccessful = true;
+        Logger.log(`🎉 Successfully claimed SQ ${selectedSQ} with ${verifiedItems.length} rows!`);
+
+        // Release queue reservation (we successfully claimed it)
+        releaseSQ(selectedSQ);
+
+        break; // Exit the loop - we got our SQ!
+
+      } catch (e) {
+        Logger.log(`ERROR: Failed to claim SQ ${selectedSQ}: ${e}`);
+        // Release queue reservation before trying next SQ
+        releaseSQ(selectedSQ);
+        // Try next SQ
+        selectedSQ = null;
+        itemsForSQ = [];
+        continue;
+      }
+    }
+
+    // Check if we successfully claimed an SQ
+    if (!claimSuccessful || !selectedSQ || itemsForSQ.length === 0) {
+      ui.alert(
+        'No Available SQs',
+        'All SQs were either partially claimed or claimed by other agents during the attempt.\n\nPlease try running again.',
+        ui.ButtonSet.OK
+      );
+      return;
     }
     
     // Write to current sheet (Helper Doc)
@@ -307,10 +629,51 @@ function pullUnclaimedItems() {
 
     // Toast notification instead of modal
     SpreadsheetApp.getActiveSpreadsheet().toast(
-      `Pulled ${itemsForSQ.length} items for SQ: ${selectedSQ}. ${uniqueSQs.length} total unclaimed SQs remaining.`,
+      `Pulled ${itemsForSQ.length} items for SQ: ${selectedSQ}. Auto-opening PDF link in 5 seconds...`,
       'Items Loaded',
-      5
+      8
     );
+
+    // 🔗 AUTO-OPEN PDF LINK: Wait 5 seconds for formulas to load, then open the PDF link
+    Logger.log('Waiting 5 seconds for PDF link formula to load...');
+    Utilities.sleep(5000);
+
+    // Get the PDF link from cell G3 (extract URL from rich text hyperlink)
+    const pdfLinkCell = currentSheet.getRange(3, 7); // Column G (7th column), Row 3
+    let pdfLink = null;
+
+    // Method 1: Try to get URL from rich text value
+    try {
+      const richTextValue = pdfLinkCell.getRichTextValue();
+      if (richTextValue) {
+        const url = richTextValue.getLinkUrl();
+        if (url) {
+          pdfLink = url;
+          Logger.log(`Found PDF link from rich text: ${pdfLink}`);
+        }
+      }
+    } catch (e) {
+      Logger.log(`Could not get rich text URL: ${e}`);
+    }
+
+    // Method 2: Fallback - check if cell value is a direct URL
+    if (!pdfLink) {
+      const cellValue = pdfLinkCell.getValue();
+      if (cellValue && typeof cellValue === 'string' && cellValue.startsWith('http')) {
+        pdfLink = cellValue;
+        Logger.log(`Found PDF link from cell value: ${pdfLink}`);
+      }
+    }
+
+    if (pdfLink && pdfLink.startsWith('http')) {
+      Logger.log(`Opening PDF link: ${pdfLink}`);
+      const html = HtmlService.createHtmlOutput(
+        `<script>window.open('${pdfLink}', '_blank'); google.script.host.close();</script>`
+      ).setWidth(100).setHeight(50);
+      SpreadsheetApp.getUi().showModalDialog(html, 'Opening PDF...');
+    } else {
+      Logger.log(`No valid PDF link found in G3. Cell value: ${pdfLinkCell.getValue()}`);
+    }
 
   } catch (error) {
     Logger.log('Error in pullUnclaimedItems: ' + error.toString());
@@ -369,9 +732,10 @@ function showUploadDialog() {
       }
       
       function onSuccess(result) {
+        // Close modal immediately - processing is complete
         google.script.host.close();
       }
-      
+
       function onError(error) {
         showStatus('Error: ' + error.message, 'error');
       }
@@ -412,13 +776,79 @@ function processPDFUpload(base64Data, fileName) {
     
     // Match cards and fill in Order Number and Buyer Name
     fillOrderInfo(parsedOrders);
-    
-    return {
-      success: true,
-      orderCount: parsedOrders.length,
-      fileName: fileName
-    };
-    
+
+    // Check if all rows have order numbers and buyer names
+    const sheet = SpreadsheetApp.getActiveSheet();
+    const dataRange = sheet.getDataRange();
+    const sheetData = dataRange.getValues();
+
+    let missingCount = 0;
+    let totalRows = 0;
+    const missingRows = [];
+
+    // Check rows starting from row 3 (data rows)
+    for (let i = 2; i < sheetData.length; i++) {
+      const row = sheetData[i];
+      const orderNumber = row[CONFIG.HELPER_COLS.ORDER_NUMBER];
+      const buyerName = row[CONFIG.HELPER_COLS.BUYER_NAME];
+      const cardName = row[CONFIG.HELPER_COLS.CARD_NAME];
+
+      // Skip empty rows
+      if (!cardName) continue;
+
+      totalRows++;
+
+      if (!orderNumber || !buyerName) {
+        missingCount++;
+        missingRows.push(i + 1); // 1-based row number
+        Logger.log(`⚠️ Missing data at row ${i + 1}: Order=${orderNumber}, Buyer=${buyerName}`);
+      }
+    }
+
+    Logger.log(`Processed ${totalRows} rows: ${totalRows - missingCount} complete, ${missingCount} missing data`);
+
+    if (missingCount === 0 && totalRows > 0) {
+      // All rows complete - auto-send to Refund Log!
+      Logger.log('✓ All rows complete - auto-sending to Refund Log...');
+
+      try {
+        // Call sendToRefundLog directly
+        sendToRefundLog();
+
+        // Auto-clear helper sheet after successful send
+        Logger.log('Auto-clearing helper sheet...');
+        clearHelperSheet();
+
+        return {
+          success: true,
+          orderCount: parsedOrders.length,
+          fileName: fileName,
+          autoSent: true,
+          message: `All ${totalRows} items matched! Automatically sent to Refund Log and cleared.`
+        };
+      } catch (sendError) {
+        Logger.log(`ERROR: Failed to auto-send to Refund Log: ${sendError}`);
+        return {
+          success: true,
+          orderCount: parsedOrders.length,
+          fileName: fileName,
+          autoSent: false,
+          message: `PDF processed successfully, but auto-send failed: ${sendError.message}. Please use "Send to Refund Log" manually.`
+        };
+      }
+    } else {
+      // Some rows missing data - require manual intervention
+      return {
+        success: true,
+        orderCount: parsedOrders.length,
+        fileName: fileName,
+        autoSent: false,
+        missingCount: missingCount,
+        totalRows: totalRows,
+        message: `${missingCount} of ${totalRows} items need manual matching. Please review rows: ${missingRows.join(', ')}`
+      };
+    }
+
   } catch (error) {
     Logger.log('Error processing PDF: ' + error.toString());
     throw new Error('Failed to process PDF: ' + error.message);
@@ -764,40 +1194,117 @@ function sendToRefundLog() {
 }
 
 /**
- * Write items to Refund Log
+ * Write items to Refund Log with atomic append protection
  */
 function writeToRefundLog(items) {
   const refundLog = SpreadsheetApp.openById(CONFIG.REFUND_LOG_ID);
   const refundSheet = refundLog.getSheetByName('Refund Log');
-  
-  // Find next empty row
-  const lastRow = refundSheet.getLastRow();
-  const nextRow = lastRow + 1;
-  
-  // Prepare rows
-  const rowsToWrite = items.map(item => {
-    const row = Array(CONFIG.REFUND_COLS.QUANTITY + 1).fill('');
-    // Column A: today's date
-    row[0] = new Date();
-    
-    row[CONFIG.REFUND_COLS.ORDER_NUMBER] = item.orderNumber;
-    row[CONFIG.REFUND_COLS.BUYER_NAME] = item.buyerName;
-    row[CONFIG.REFUND_COLS.SQ_NUMBER] = item.sqNumber;
-    row[CONFIG.REFUND_COLS.GAME] = item.game || 'Magic';
-    row[CONFIG.REFUND_COLS.CARD_NAME] = item.cardName;
-    row[CONFIG.REFUND_COLS.CARD_NUM] = item.collectorNum;
-    row[CONFIG.REFUND_COLS.RARITY] = item.rarity;
-    row[CONFIG.REFUND_COLS.SET_NAME] = item.setName;
-    row[CONFIG.REFUND_COLS.CONDITION] = item.condition;
-    row[CONFIG.REFUND_COLS.QUANTITY] = item.qty;
-    
-    return row;
-  });
-  
-  // Write to sheet
-  refundSheet.getRange(nextRow, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
-  // Ensure column A displays as date
-  refundSheet.getRange(nextRow, 1, rowsToWrite.length, 1).setNumberFormat('m/d/yyyy');
+
+  // Generate unique timestamp for this batch
+  const batchTimestamp = new Date().getTime();
+  const botId = CONFIG.BOT_ID;
+
+  Logger.log(`Writing ${items.length} items to Refund Log (BOT: ${botId}, Timestamp: ${batchTimestamp})`);
+
+  let writeSuccessful = false;
+  let attemptCount = 0;
+  const maxAttempts = 3;
+
+  // Get SQ number from items for queue coordination
+  const sqNumber = items[0]?.sqNumber || 'UNKNOWN';
+
+  while (!writeSuccessful && attemptCount < maxAttempts) {
+    attemptCount++;
+    Logger.log(`Write attempt ${attemptCount}/${maxAttempts}...`);
+
+    try {
+      // 🔒 QUEUE RESERVATION: Reserve our spot in the write queue
+      const assignedRow = tryReserveRefundLogWrite(sqNumber, items.length);
+
+      if (!assignedRow) {
+        Logger.log(`⚠️ Failed to reserve Refund Log write slot - retrying...`);
+        Utilities.sleep(5000);
+        continue;
+      }
+
+      const nextRow = assignedRow;
+
+      Logger.log(`Queue assigned rows ${nextRow}-${nextRow + items.length - 1}`);
+
+      // Prepare rows with unique batch identifier
+      const rowsToWrite = items.map(item => {
+        const row = Array(CONFIG.REFUND_COLS.QUANTITY + 1).fill('');
+        // Column A: today's date
+        row[0] = new Date();
+
+        row[CONFIG.REFUND_COLS.ORDER_NUMBER] = item.orderNumber;
+        row[CONFIG.REFUND_COLS.BUYER_NAME] = item.buyerName;
+        row[CONFIG.REFUND_COLS.SQ_NUMBER] = item.sqNumber;
+        row[CONFIG.REFUND_COLS.GAME] = item.game || 'Magic';
+        row[CONFIG.REFUND_COLS.CARD_NAME] = item.cardName;
+        row[CONFIG.REFUND_COLS.CARD_NUM] = item.collectorNum;
+        row[CONFIG.REFUND_COLS.RARITY] = item.rarity;
+        row[CONFIG.REFUND_COLS.SET_NAME] = item.setName;
+        row[CONFIG.REFUND_COLS.CONDITION] = item.condition;
+        row[CONFIG.REFUND_COLS.QUANTITY] = item.qty;
+
+        return row;
+      });
+
+      // Write to sheet
+      refundSheet.getRange(nextRow, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
+      // Ensure column A displays as date
+      refundSheet.getRange(nextRow, 1, rowsToWrite.length, 1).setNumberFormat('m/d/yyyy');
+
+      Logger.log(`✓ Wrote ${rowsToWrite.length} rows starting at row ${nextRow}`);
+
+      // Wait 10 seconds to let other bots finish writing
+      Logger.log(`Waiting 10 seconds before verification...`);
+      Utilities.sleep(10000);
+
+      // Verify: Check if our data is still there
+      const verifyRange = refundSheet.getRange(nextRow, CONFIG.REFUND_COLS.SQ_NUMBER + 1, rowsToWrite.length, 1);
+      const verifyData = verifyRange.getValues();
+
+      let allRowsVerified = true;
+      for (let i = 0; i < verifyData.length; i++) {
+        const expectedSQ = items[i].sqNumber;
+        const actualSQ = verifyData[i][0];
+
+        if (actualSQ !== expectedSQ) {
+          Logger.log(`⚠️ Verification failed at row ${nextRow + i}: expected SQ ${expectedSQ}, found ${actualSQ}`);
+          allRowsVerified = false;
+          break;
+        }
+      }
+
+      if (allRowsVerified) {
+        Logger.log(`✓ All ${rowsToWrite.length} rows verified successfully!`);
+        writeSuccessful = true;
+        // Release queue reservation after successful write
+        releaseRefundLogWrite(sqNumber);
+      } else {
+        Logger.log(`⚠️ Verification failed - another bot overwrote our data. Retrying...`);
+        // Release queue reservation before retry
+        releaseRefundLogWrite(sqNumber);
+        // Wait 10 seconds before retry to let other bot finish
+        Utilities.sleep(10000);
+      }
+
+    } catch (e) {
+      Logger.log(`ERROR during write attempt ${attemptCount}: ${e}`);
+      // Release queue reservation on error
+      releaseRefundLogWrite(sqNumber);
+      if (attemptCount >= maxAttempts) {
+        throw new Error(`Failed to write to Refund Log after ${maxAttempts} attempts: ${e.message}`);
+      }
+      Utilities.sleep(10000);
+    }
+  }
+
+  if (!writeSuccessful) {
+    throw new Error('Failed to write to Refund Log after multiple attempts - data may have been overwritten by concurrent writes');
+  }
 }
 
 /**
