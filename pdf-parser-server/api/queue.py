@@ -1,96 +1,212 @@
 """
 Vercel Queue Management API for Helper Doc Coordination
 
+Uses Vercel KV (Redis) for persistent, atomic queue coordination across
+all function instances and concurrent requests.
+
 Endpoints:
 - POST /api/queue - Manage SQ claims and Refund Log reservations
-
-All coordination is stateless using timestamp-based locking.
+- GET /api/queue - Health check and queue status
 """
 
 from http.server import BaseHTTPRequestHandler
 import json
 from datetime import datetime, timedelta
 import os
+import requests
 
-# In-memory storage (persists during Vercel function lifetime)
-# For production, consider Vercel KV or Redis
-_queue_storage = {
-    'sq_claims': {},      # {sqNumber: {botId, timestamp, status}}
-    'refund_reservations': {}  # {sqNumber: {botId, startRow, rowCount, timestamp}}
-}
+# Vercel KV REST API credentials (automatically set by Vercel)
+KV_REST_API_URL = os.environ.get('KV_REST_API_URL', '')
+KV_REST_API_TOKEN = os.environ.get('KV_REST_API_TOKEN', '')
 
 CLAIM_TIMEOUT_SECONDS = 600  # 10 minutes
 
+class VercelKV:
+    """Vercel KV REST API client"""
+
+    def __init__(self, url, token):
+        self.url = url.rstrip('/')
+        self.headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json'
+        }
+
+    def get(self, key):
+        """Get value for key"""
+        try:
+            response = requests.get(
+                f'{self.url}/get/{key}',
+                headers=self.headers,
+                timeout=5
+            )
+            if response.status_code == 200:
+                result = response.json()
+                return result.get('result')
+            return None
+        except Exception as e:
+            print(f'KV GET error: {e}')
+            return None
+
+    def set(self, key, value, ex=None):
+        """Set key to value with optional expiration in seconds"""
+        try:
+            data = [key, value]
+            if ex:
+                data.extend(['EX', ex])
+
+            response = requests.post(
+                f'{self.url}/set',
+                headers=self.headers,
+                json=data,
+                timeout=5
+            )
+            return response.status_code == 200
+        except Exception as e:
+            print(f'KV SET error: {e}')
+            return False
+
+    def delete(self, key):
+        """Delete key"""
+        try:
+            response = requests.post(
+                f'{self.url}/del',
+                headers=self.headers,
+                json=[key],
+                timeout=5
+            )
+            return response.status_code == 200
+        except Exception as e:
+            print(f'KV DEL error: {e}')
+            return False
+
+    def keys(self, pattern='*'):
+        """Get all keys matching pattern"""
+        try:
+            response = requests.get(
+                f'{self.url}/keys/{pattern}',
+                headers=self.headers,
+                timeout=5
+            )
+            if response.status_code == 200:
+                result = response.json()
+                return result.get('result', [])
+            return []
+        except Exception as e:
+            print(f'KV KEYS error: {e}')
+            return []
+
+# Initialize KV client
+kv = VercelKV(KV_REST_API_URL, KV_REST_API_TOKEN) if KV_REST_API_URL and KV_REST_API_TOKEN else None
+
 def clean_stale_claims():
     """Remove claims older than CLAIM_TIMEOUT_SECONDS"""
+    if not kv:
+        return
+
     now = datetime.now()
 
     # Clean SQ claims
-    stale_sqs = []
-    for sq_number, claim in _queue_storage['sq_claims'].items():
-        claim_time = datetime.fromisoformat(claim['timestamp'])
-        if (now - claim_time).total_seconds() > CLAIM_TIMEOUT_SECONDS:
-            stale_sqs.append(sq_number)
-
-    for sq in stale_sqs:
-        del _queue_storage['sq_claims'][sq]
+    sq_keys = kv.keys('sq:*')
+    for key in sq_keys:
+        data = kv.get(key)
+        if data:
+            try:
+                claim = json.loads(data)
+                claim_time = datetime.fromisoformat(claim['timestamp'])
+                if (now - claim_time).total_seconds() > CLAIM_TIMEOUT_SECONDS:
+                    kv.delete(key)
+            except:
+                pass
 
     # Clean Refund Log reservations
-    stale_refunds = []
-    for sq_number, reservation in _queue_storage['refund_reservations'].items():
-        reservation_time = datetime.fromisoformat(reservation['timestamp'])
-        if (now - reservation_time).total_seconds() > CLAIM_TIMEOUT_SECONDS:
-            stale_refunds.append(sq_number)
-
-    for sq in stale_refunds:
-        del _queue_storage['refund_reservations'][sq]
+    refund_keys = kv.keys('refund:*')
+    for key in refund_keys:
+        data = kv.get(key)
+        if data:
+            try:
+                reservation = json.loads(data)
+                reservation_time = datetime.fromisoformat(reservation['timestamp'])
+                if (now - reservation_time).total_seconds() > CLAIM_TIMEOUT_SECONDS:
+                    kv.delete(key)
+            except:
+                pass
 
 def try_claim_sq(bot_id, sq_number):
     """Try to claim an SQ for a bot"""
+    if not kv:
+        return {
+            'success': False,
+            'error': 'KV not configured. Set up Vercel KV in dashboard.'
+        }
+
     clean_stale_claims()
 
+    key = f'sq:{sq_number}'
+
     # Check if already claimed
-    if sq_number in _queue_storage['sq_claims']:
-        claim = _queue_storage['sq_claims'][sq_number]
-        if claim['status'] == 'CLAIMING':
-            return {
-                'success': False,
-                'message': f"SQ {sq_number} already claimed by {claim['botId']}",
-                'claimedBy': claim['botId']
-            }
+    existing = kv.get(key)
+    if existing:
+        try:
+            claim = json.loads(existing)
+            if claim['status'] == 'CLAIMING':
+                return {
+                    'success': False,
+                    'message': f"SQ {sq_number} already claimed by {claim['botId']}",
+                    'claimedBy': claim['botId']
+                }
+        except:
+            pass
 
     # Claim it
-    _queue_storage['sq_claims'][sq_number] = {
+    claim = {
         'botId': bot_id,
         'timestamp': datetime.now().isoformat(),
         'status': 'CLAIMING'
     }
 
-    return {
-        'success': True,
-        'message': f"Successfully claimed SQ {sq_number}",
-        'sqNumber': sq_number,
-        'botId': bot_id
-    }
+    # Set with expiration (auto-cleanup after timeout)
+    if kv.set(key, json.dumps(claim), ex=CLAIM_TIMEOUT_SECONDS):
+        return {
+            'success': True,
+            'message': f"Successfully claimed SQ {sq_number}",
+            'sqNumber': sq_number,
+            'botId': bot_id
+        }
+    else:
+        return {
+            'success': False,
+            'error': 'Failed to write to KV'
+        }
 
 def release_sq(bot_id, sq_number):
     """Release an SQ claim"""
-    if sq_number not in _queue_storage['sq_claims']:
+    if not kv:
+        return {'success': False, 'error': 'KV not configured'}
+
+    key = f'sq:{sq_number}'
+
+    # Check ownership
+    existing = kv.get(key)
+    if not existing:
         return {
             'success': False,
             'message': f"No claim found for SQ {sq_number}"
         }
 
-    claim = _queue_storage['sq_claims'][sq_number]
-    if claim['botId'] != bot_id:
-        return {
-            'success': False,
-            'message': f"SQ {sq_number} claimed by {claim['botId']}, not {bot_id}"
-        }
+    try:
+        claim = json.loads(existing)
+        if claim['botId'] != bot_id:
+            return {
+                'success': False,
+                'message': f"SQ {sq_number} claimed by {claim['botId']}, not {bot_id}"
+            }
+    except:
+        pass
 
-    # Mark as completed (don't delete immediately - helps with debugging)
-    _queue_storage['sq_claims'][sq_number]['status'] = 'COMPLETED'
-    _queue_storage['sq_claims'][sq_number]['completedAt'] = datetime.now().isoformat()
+    # Mark as completed (keep for debugging)
+    claim['status'] = 'COMPLETED'
+    claim['completedAt'] = datetime.now().isoformat()
+    kv.set(key, json.dumps(claim), ex=CLAIM_TIMEOUT_SECONDS)
 
     return {
         'success': True,
@@ -105,27 +221,35 @@ def reserve_refund_log_write(bot_id, sq_number, row_count, current_last_row=1):
         bot_id: Bot identifier (e.g., 'BOT1')
         sq_number: SQ number being processed
         row_count: Number of rows needed
-        current_last_row: Last used row from Refund Log sheet (passed by caller)
+        current_last_row: Last used row from Refund Log sheet
 
     Returns:
         Starting row number for this reservation
     """
+    if not kv:
+        return {'success': False, 'error': 'KV not configured'}
+
     clean_stale_claims()
 
-    # Calculate next available row based on:
-    # 1. Current last row in sheet (passed by caller)
-    # 2. Existing active reservations
+    # Calculate next available row
     next_row = current_last_row + 1
 
     # Find highest reserved row from active reservations
-    for reservation in _queue_storage['refund_reservations'].values():
-        if reservation.get('status') != 'COMPLETED':
-            end_row = reservation['startRow'] + reservation['rowCount']
-            if end_row > next_row:
-                next_row = end_row
+    refund_keys = kv.keys('refund:*')
+    for key in refund_keys:
+        data = kv.get(key)
+        if data:
+            try:
+                reservation = json.loads(data)
+                if reservation.get('status') != 'COMPLETED':
+                    end_row = reservation['startRow'] + reservation['rowCount']
+                    if end_row > next_row:
+                        next_row = end_row
+            except:
+                pass
 
     # Create reservation
-    _queue_storage['refund_reservations'][sq_number] = {
+    reservation = {
         'botId': bot_id,
         'startRow': next_row,
         'rowCount': row_count,
@@ -133,32 +257,50 @@ def reserve_refund_log_write(bot_id, sq_number, row_count, current_last_row=1):
         'timestamp': datetime.now().isoformat()
     }
 
-    return {
-        'success': True,
-        'startRow': next_row,
-        'rowCount': row_count,
-        'sqNumber': sq_number,
-        'botId': bot_id
-    }
+    key = f'refund:{sq_number}'
+    if kv.set(key, json.dumps(reservation), ex=CLAIM_TIMEOUT_SECONDS):
+        return {
+            'success': True,
+            'startRow': next_row,
+            'rowCount': row_count,
+            'sqNumber': sq_number,
+            'botId': bot_id
+        }
+    else:
+        return {
+            'success': False,
+            'error': 'Failed to write reservation to KV'
+        }
 
 def release_refund_log_write(bot_id, sq_number):
-    """Mark Refund Log reservation as completed (don't delete - helps with debugging)"""
-    if sq_number not in _queue_storage['refund_reservations']:
+    """Mark Refund Log reservation as completed"""
+    if not kv:
+        return {'success': False, 'error': 'KV not configured'}
+
+    key = f'refund:{sq_number}'
+
+    # Check ownership
+    existing = kv.get(key)
+    if not existing:
         return {
             'success': False,
             'message': f"No reservation found for SQ {sq_number}"
         }
 
-    reservation = _queue_storage['refund_reservations'][sq_number]
-    if reservation['botId'] != bot_id:
-        return {
-            'success': False,
-            'message': f"Reservation for SQ {sq_number} owned by {reservation['botId']}, not {bot_id}"
-        }
+    try:
+        reservation = json.loads(existing)
+        if reservation['botId'] != bot_id:
+            return {
+                'success': False,
+                'message': f"Reservation for SQ {sq_number} owned by {reservation['botId']}, not {bot_id}"
+            }
+    except:
+        pass
 
-    # Mark as completed (don't delete - helps calculate next row correctly)
-    _queue_storage['refund_reservations'][sq_number]['status'] = 'COMPLETED'
-    _queue_storage['refund_reservations'][sq_number]['completedAt'] = datetime.now().isoformat()
+    # Mark as completed
+    reservation['status'] = 'COMPLETED'
+    reservation['completedAt'] = datetime.now().isoformat()
+    kv.set(key, json.dumps(reservation), ex=CLAIM_TIMEOUT_SECONDS)
 
     return {
         'success': True,
@@ -167,13 +309,44 @@ def release_refund_log_write(bot_id, sq_number):
 
 def get_queue_status():
     """Get current queue status (for debugging)"""
+    if not kv:
+        return {
+            'success': False,
+            'error': 'KV not configured. Visit Vercel dashboard to set up KV storage.'
+        }
+
     clean_stale_claims()
+
+    # Get all SQ claims
+    sq_claims = {}
+    sq_keys = kv.keys('sq:*')
+    for key in sq_keys:
+        data = kv.get(key)
+        if data:
+            try:
+                sq_number = key.replace('sq:', '')
+                sq_claims[sq_number] = json.loads(data)
+            except:
+                pass
+
+    # Get all Refund Log reservations
+    refund_reservations = {}
+    refund_keys = kv.keys('refund:*')
+    for key in refund_keys:
+        data = kv.get(key)
+        if data:
+            try:
+                sq_number = key.replace('refund:', '')
+                refund_reservations[sq_number] = json.loads(data)
+            except:
+                pass
 
     return {
         'success': True,
-        'sqClaims': _queue_storage['sq_claims'],
-        'refundReservations': _queue_storage['refund_reservations'],
-        'timestamp': datetime.now().isoformat()
+        'sqClaims': sq_claims,
+        'refundReservations': refund_reservations,
+        'timestamp': datetime.now().isoformat(),
+        'kvConfigured': True
     }
 
 class handler(BaseHTTPRequestHandler):
