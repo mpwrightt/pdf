@@ -837,12 +837,12 @@ function pullNextSQ(botId) {
 
 /**
  * Upload SQ data to Refund Log
- * Combines sqData with any manually entered data
+ * Accepts either a single item or an array of items
  */
 function uploadToRefundLog(sqData, manualData) {
   const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
   if (!lock) {
-    return {success: false, message: 'Failed to acquire lock', row: null};
+    return {success: false, message: 'Failed to acquire lock', rows: null};
   }
 
   try {
@@ -850,46 +850,59 @@ function uploadToRefundLog(sqData, manualData) {
     const refundSheet = refundLog.getSheetByName('Refund Log');
 
     if (!refundSheet) {
-      return {success: false, message: 'Refund Log sheet not found', row: null};
+      return {success: false, message: 'Refund Log sheet not found', rows: null};
     }
+
+    // Check if sqData is an array of items (from Helper Doc with multiple rows)
+    // or a single item (from Web UI manual entry)
+    const items = Array.isArray(sqData) ? sqData : [sqData];
+
+    Logger.log(`uploadToRefundLog: Processing ${items.length} item(s)`);
 
     // Get next available row
     const nextRow = refundSheet.getLastRow() + 1;
 
-    // Merge sqData with manualData (manualData takes precedence)
-    const finalData = Object.assign({}, sqData, manualData);
+    // Prepare all rows
+    const rowsToWrite = items.map(item => {
+      // Merge item with manualData if provided (manualData takes precedence)
+      const finalData = manualData ? Object.assign({}, item, manualData) : item;
 
-    // Prepare row data matching HelperDocAutomation.gs REFUND_COLS
-    // Use array indices to match exact column positions
-    const rowData = Array(12).fill(''); // Initialize array for columns A-L (0-11)
-    rowData[0] = new Date();                              // Column A (Date)
-    // rowData[1] stays empty                             // Column B (order link or formula)
-    rowData[2] = finalData.orderNumber || '';             // Column C
-    rowData[3] = finalData.buyerName || '';               // Column D
-    rowData[4] = finalData.sqNumber || '';                // Column E
-    rowData[5] = finalData.game || 'Magic: The Gathering';// Column F
-    rowData[6] = finalData.cardName || '';                // Column G
-    rowData[7] = finalData.collectorNum || '';            // Column H
-    rowData[8] = finalData.rarity || '';                  // Column I
-    rowData[9] = finalData.setName || '';                 // Column J
-    rowData[10] = finalData.condition || '';              // Column K
-    rowData[11] = finalData.qty || 1;                     // Column L
+      // Prepare row data matching HelperDocAutomation.gs REFUND_COLS
+      // Use array indices to match exact column positions
+      const rowData = Array(12).fill(''); // Initialize array for columns A-L (0-11)
+      rowData[0] = new Date();                              // Column A (Date)
+      // rowData[1] stays empty                             // Column B (order link or formula)
+      rowData[2] = finalData.orderNumber || '';             // Column C
+      rowData[3] = finalData.buyerName || '';               // Column D
+      rowData[4] = finalData.sqNumber || '';                // Column E
+      rowData[5] = finalData.game || 'Magic: The Gathering';// Column F
+      rowData[6] = finalData.cardName || '';                // Column G
+      rowData[7] = finalData.collectorNum || finalData.collectorNumber || ''; // Column H
+      rowData[8] = finalData.rarity || '';                  // Column I
+      rowData[9] = finalData.setName || '';                 // Column J
+      rowData[10] = finalData.condition || '';              // Column K
+      rowData[11] = finalData.qty || finalData.quantity || 1; // Column L
 
-    // Write to Refund Log
-    refundSheet.getRange(nextRow, 1, 1, rowData.length).setValues([rowData]);
-    // Format date column
-    refundSheet.getRange(nextRow, 1).setNumberFormat('m/d/yyyy');
+      return rowData;
+    });
+
+    // Write all rows to Refund Log at once
+    refundSheet.getRange(nextRow, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
+    // Format date column for all rows
+    refundSheet.getRange(nextRow, 1, rowsToWrite.length, 1).setNumberFormat('m/d/yyyy');
     SpreadsheetApp.flush();
 
-    // Sync completion to Convex for real-time dashboard
-    // Note: We don't have botId here, so we'll need to pass it from the frontend
-    // For now, just log the upload
-    Logger.log('Uploaded SQ ' + finalData.sqNumber + ' to Refund Log at row ' + nextRow);
-    return {success: true, message: 'Uploaded to Refund Log', row: nextRow};
+    Logger.log(`Uploaded ${rowsToWrite.length} row(s) to Refund Log starting at row ${nextRow}`);
+    return {
+      success: true,
+      message: `Uploaded ${rowsToWrite.length} item(s) to Refund Log`,
+      rows: rowsToWrite.length,
+      startRow: nextRow
+    };
 
   } catch (e) {
     Logger.log('ERROR in uploadToRefundLog: ' + e);
-    return {success: false, message: 'Exception: ' + e.message, row: null};
+    return {success: false, message: 'Exception: ' + e.message, rows: null};
   } finally {
     lock.releaseLock();
   }
