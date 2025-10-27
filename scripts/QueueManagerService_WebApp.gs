@@ -860,21 +860,20 @@ function uploadToRefundLog(sqData, manualData) {
     const finalData = Object.assign({}, sqData, manualData);
 
     // Prepare row data matching HelperDocAutomation.gs REFUND_COLS
-    // Column A: Date, Column B: empty/formula, then C-L for data
-    const rowData = [
-      new Date(), // Column A (Date)
-      '', // Column B (order link or formula)
-      finalData.orderNumber || '', // Column C
-      finalData.buyerName || '', // Column D
-      finalData.sqNumber || '', // Column E
-      finalData.game || 'Magic: The Gathering', // Column F
-      finalData.cardName || '', // Column G
-      finalData.collectorNum || '', // Column H
-      finalData.rarity || '', // Column I
-      finalData.setName || '', // Column J
-      finalData.condition || '', // Column K
-      finalData.qty || 1 // Column L
-    ];
+    // Use array indices to match exact column positions
+    const rowData = Array(12).fill(''); // Initialize array for columns A-L (0-11)
+    rowData[0] = new Date();                              // Column A (Date)
+    // rowData[1] stays empty                             // Column B (order link or formula)
+    rowData[2] = finalData.orderNumber || '';             // Column C
+    rowData[3] = finalData.buyerName || '';               // Column D
+    rowData[4] = finalData.sqNumber || '';                // Column E
+    rowData[5] = finalData.game || 'Magic: The Gathering';// Column F
+    rowData[6] = finalData.cardName || '';                // Column G
+    rowData[7] = finalData.collectorNum || '';            // Column H
+    rowData[8] = finalData.rarity || '';                  // Column I
+    rowData[9] = finalData.setName || '';                 // Column J
+    rowData[10] = finalData.condition || '';              // Column K
+    rowData[11] = finalData.qty || 1;                     // Column L
 
     // Write to Refund Log
     refundSheet.getRange(nextRow, 1, 1, rowData.length).setValues([rowData]);
