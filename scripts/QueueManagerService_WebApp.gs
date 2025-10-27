@@ -430,17 +430,20 @@ function getActiveClaims() {
       muteHttpExceptions: true
     };
 
+    Logger.log('getActiveClaims: Fetching from ' + url);
     const response = UrlFetchApp.fetch(url, options);
     const result = JSON.parse(response.getContentText());
+    Logger.log('getActiveClaims: Response: ' + JSON.stringify(result));
 
     if (result.success && result.sessions) {
       // Transform sessions to match expected format for UI
+      // Use simple objects only - no Date objects as they don't serialize well
       const sessions = result.sessions.map(function(session) {
         return {
           botId: session.botId,
-          sqNumber: 'SESSION', // Keep compatibility with old format
+          sqNumber: 'SESSION',
           status: 'SESSION',
-          timestamp: new Date(session.lastActivity),
+          timestamp: session.lastActivity, // Keep as timestamp number
           age: session.age
         };
       });
@@ -448,12 +451,13 @@ function getActiveClaims() {
       Logger.log('getActiveClaims: Returning ' + sessions.length + ' active sessions from Convex');
       return sessions;
     } else {
-      Logger.log('getActiveClaims: No active sessions found');
+      Logger.log('getActiveClaims: No active sessions found or result not successful');
       return [];
     }
 
   } catch (e) {
     Logger.log('ERROR in getActiveClaims: ' + e);
+    Logger.log('ERROR stack: ' + e.stack);
     return [];
   }
 }

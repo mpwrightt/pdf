@@ -343,15 +343,17 @@
           const status = document.getElementById(statusId);
 
           btn.disabled = true;
-          btn.classList.add('disabled', 'opacity-50');
+          btn.classList.add('disabled');
+          btn.style.opacity = '0.5';
+          btn.style.cursor = 'not-allowed';
 
           if (claim.status === 'SESSION') {
-            status.textContent = '🔒 In Use - Active Session';
+            status.innerHTML = '<i class="bi bi-lock-fill"></i> In Use';
           } else {
-            status.textContent = '🔒 In Use - Processing SQ ' + claim.sqNumber;
+            status.innerHTML = '<i class="bi bi-lock-fill"></i> Processing';
           }
 
-          status.className = 'd-block mt-2 small text-warning fw-bold';
+          status.className = 'd-block mt-2 small text-white-50';
         }
       });
     }

@@ -12,6 +12,7 @@ import type * as http from "../http.js";
 import type * as paymentAttemptTypes from "../paymentAttemptTypes.js";
 import type * as paymentAttempts from "../paymentAttempts.js";
 import type * as queue from "../queue.js";
+import type * as sessions from "../sessions.js";
 import type * as sqClaims from "../sqClaims.js";
 import type * as users from "../users.js";
 
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   paymentAttemptTypes: typeof paymentAttemptTypes;
   paymentAttempts: typeof paymentAttempts;
   queue: typeof queue;
+  sessions: typeof sessions;
   sqClaims: typeof sqClaims;
   users: typeof users;
 }>;
