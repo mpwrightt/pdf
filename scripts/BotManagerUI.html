@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bot Manager</title>
+
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+
+  <style>
+    body {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+    }
+
+    .card {
+      border: none;
+      border-radius: 15px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      margin-bottom: 20px;
+    }
+
+    .card-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-radius: 15px 15px 0 0 !important;
+      font-weight: 600;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: none;
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+    }
+
+    .bot-btn {
+      padding: 30px;
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin: 10px;
+      border-radius: 15px;
+      transition: all 0.3s;
+    }
+
+    .bot-btn:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+    }
+
+    .status-badge {
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 0.9rem;
+    }
+
+    #loading {
+      display: none;
+    }
+
+    .spinner-border {
+      width: 1.5rem;
+      height: 1.5rem;
+    }
+
+    .data-item {
+      padding: 15px;
+      background: #f8f9fa;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+
+    .data-label {
+      font-weight: 600;
+      color: #6c757d;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+    }
+
+    .data-value {
+      font-size: 1.1rem;
+      color: #212529;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="text-center mb-4">
+      <h1 class="text-white mb-2"><i class="bi bi-robot"></i> Bot Manager</h1>
+      <p class="text-white-50">Discrepancy Refund Processing System</p>
+    </div>
+
+    <!-- Loading Indicator -->
+    <div id="loading" class="text-center mb-4">
+      <div class="spinner-border text-white" role="status">
+        <span class="visually-hidden">Loading...</span>
+      </div>
+      <p class="text-white mt-2" id="loadingText">Processing...</p>
+    </div>
+
+    <!-- Bot Selection -->
+    <div id="botSelection" class="card">
+      <div class="card-header">
+        <h4 class="mb-0"><i class="bi bi-grid-3x3"></i> Select Bot</h4>
+      </div>
+      <div class="card-body text-center">
+        <button id="bot1Btn" class="btn btn-primary btn-lg bot-btn" onclick="selectBot('BOT1')">
+          <i class="bi bi-1-circle"></i> BOT 1
+          <span id="bot1Status" class="d-block mt-2 small"></span>
+        </button>
+        <button id="bot2Btn" class="btn btn-success btn-lg bot-btn" onclick="selectBot('BOT2')">
+          <i class="bi bi-2-circle"></i> BOT 2
+          <span id="bot2Status" class="d-block mt-2 small"></span>
+        </button>
+        <button id="bot3Btn" class="btn btn-info btn-lg bot-btn" onclick="selectBot('BOT3')">
+          <i class="bi bi-3-circle"></i> BOT 3
+          <span id="bot3Status" class="d-block mt-2 small"></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Bot Console (hidden initially) -->
+    <div id="botConsole" style="display: none;">
+      <!-- Header with Back Button -->
+      <div class="card">
+        <div class="card-body d-flex justify-content-between align-items-center">
+          <h3 class="mb-0"><i class="bi bi-robot"></i> <span id="currentBotName"></span> Console</h3>
+          <button class="btn btn-secondary" onclick="backToSelection()">
+            <i class="bi bi-arrow-left"></i> Back
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 1: Pull & Claim SQ -->
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-download"></i> Step 1: Pull & Claim SQ</h5>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">Fetch the next unclaimed SQ from the Discrep Sheet</p>
+          <button id="pullBtn" class="btn btn-primary btn-lg w-100" onclick="pullAndClaimSQ()">
+            <i class="bi bi-cloud-download"></i> Pull & Claim Next SQ
+          </button>
+        </div>
+      </div>
+
+      <!-- SQ Data Display -->
+      <div id="sqDataCard" class="card" style="display: none;">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-file-text"></i> Current SQ Data</h5>
+        </div>
+        <div class="card-body">
+          <div class="row">
+            <div class="col-md-6">
+              <div class="data-item">
+                <div class="data-label">SQ Number</div>
+                <div class="data-value" id="sqNumber">-</div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="data-item">
+                <div class="data-label">Order Number</div>
+                <div class="data-value" id="orderNumber">-</div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="data-item">
+                <div class="data-label">Buyer Name</div>
+                <div class="data-value" id="buyerName">-</div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="data-item">
+                <div class="data-label">Game</div>
+                <div class="data-value" id="game">-</div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="data-item">
+                <div class="data-label">Card Name</div>
+                <div class="data-value" id="cardName">-</div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="data-item">
+                <div class="data-label">Set</div>
+                <div class="data-value" id="setName">-</div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="data-item">
+                <div class="data-label">Quantity</div>
+                <div class="data-value" id="qty">-</div>
+              </div>
+            </div>
+          </div>
+          <button id="openSqBtn" class="btn btn-outline-primary mt-3" onclick="openSqLink()" style="display: none;">
+            <i class="bi bi-box-arrow-up-right"></i> Open SQ Link
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 2: PDF Upload -->
+      <div id="pdfUploadCard" class="card" style="display: none;">
+        <div class="card-header bg-info text-white">
+          <h5 class="mb-0"><i class="bi bi-file-pdf"></i> Step 2: Upload SQ Details PDF</h5>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">Upload the PDF to auto-fill Order Number and Buyer Name</p>
+          <div class="upload-area" style="border: 2px dashed #ccc; padding: 40px; text-align: center; margin: 20px 0; cursor: pointer;" onclick="document.getElementById('fileInput').click()">
+            <i class="bi bi-cloud-upload" style="font-size: 3rem; color: #6c757d;"></i>
+            <p class="mt-3">Click to select PDF file</p>
+            <input type="file" id="fileInput" accept=".pdf" style="display:none" onchange="uploadPDF()">
+          </div>
+          <div id="uploadStatus" style="display: none; padding: 10px; margin-top: 10px;"></div>
+        </div>
+      </div>
+
+      <!-- Step 3: Manual Data Entry (if PDF doesn't work) -->
+      <div id="manualDataCard" class="card" style="display: none;">
+        <div class="card-header bg-warning text-dark">
+          <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Step 3: Fill Missing Information</h5>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">Some fields are missing. Please enter them manually based on the SQ.</p>
+          <div id="manualFields"></div>
+          <button class="btn btn-warning w-100 mt-3" onclick="syncManualData()">
+            <i class="bi bi-arrow-repeat"></i> Sync Manual Data
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 4: Upload to Refund Log -->
+      <div id="uploadCard" class="card" style="display: none;">
+        <div class="card-header bg-success text-white">
+          <h5 class="mb-0"><i class="bi bi-cloud-upload"></i> Step 4: Upload to Refund Log</h5>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">Upload the processed SQ data to the Refund Log sheet</p>
+          <button id="uploadBtn" class="btn btn-success btn-lg w-100" onclick="uploadToRefundLog()">
+            <i class="bi bi-upload"></i> Upload to Refund Log
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentBot = null;
+    let currentSQ = null;
+    let missingFields = [];
+    let manualData = {};
+    let botStatusInterval = null;
+
+    // Check bot status on page load and every 5 seconds
+    window.addEventListener('load', function() {
+      checkBotStatus();
+      botStatusInterval = setInterval(checkBotStatus, 5000);
+    });
+
+    function checkBotStatus() {
+      google.script.run
+        .withSuccessHandler(updateBotStatus)
+        .withFailureHandler(function(error) {
+          console.error('Error checking bot status:', error);
+        })
+        .getActiveClaims();
+    }
+
+    function updateBotStatus(claims) {
+      // Add null/undefined check
+      if (!claims || !Array.isArray(claims)) {
+        console.warn('No claims data received, all bots will show as available');
+        claims = [];
+      }
+
+      // Reset all bots to available
+      ['BOT1', 'BOT2', 'BOT3'].forEach(botId => {
+        const btnId = 'bot' + botId.slice(-1) + 'Btn';
+        const statusId = 'bot' + botId.slice(-1) + 'Status';
+        const btn = document.getElementById(btnId);
+        const status = document.getElementById(statusId);
+
+        btn.disabled = false;
+        btn.classList.remove('disabled', 'opacity-50');
+        status.textContent = '';
+        status.className = 'd-block mt-2 small';
+      });
+
+      // Mark busy bots
+      claims.forEach(claim => {
+        if (claim.status === 'CLAIMING') {
+          const botNum = claim.botId.slice(-1);
+          const btnId = 'bot' + botNum + 'Btn';
+          const statusId = 'bot' + botNum + 'Status';
+          const btn = document.getElementById(btnId);
+          const status = document.getElementById(statusId);
+
+          btn.disabled = true;
+          btn.classList.add('disabled', 'opacity-50');
+          status.textContent = '🔒 In Use - Processing SQ ' + claim.sqNumber;
+          status.className = 'd-block mt-2 small text-warning fw-bold';
+        }
+      });
+    }
+
+    function selectBot(botId) {
+      // Stop checking status when inside a bot console
+      if (botStatusInterval) {
+        clearInterval(botStatusInterval);
+        botStatusInterval = null;
+      }
+
+      currentBot = botId;
+      document.getElementById('botSelection').style.display = 'none';
+      document.getElementById('botConsole').style.display = 'block';
+      document.getElementById('currentBotName').textContent = botId;
+    }
+
+    function backToSelection() {
+      document.getElementById('botSelection').style.display = 'block';
+      document.getElementById('botConsole').style.display = 'none';
+      resetBotConsole();
+
+      // Restart status checking
+      checkBotStatus();
+      botStatusInterval = setInterval(checkBotStatus, 5000);
+    }
+
+    function resetBotConsole() {
+      currentBot = null;
+      currentSQ = null;
+      missingFields = [];
+      manualData = {};
+      document.getElementById('sqDataCard').style.display = 'none';
+      document.getElementById('manualDataCard').style.display = 'none';
+      document.getElementById('uploadCard').style.display = 'none';
+      document.getElementById('pullBtn').disabled = false;
+    }
+
+    function showLoading(text) {
+      document.getElementById('loadingText').textContent = text;
+      document.getElementById('loading').style.display = 'block';
+    }
+
+    function hideLoading() {
+      document.getElementById('loading').style.display = 'none';
+    }
+
+    function pullAndClaimSQ() {
+      showLoading('Pulling next SQ...');
+      document.getElementById('pullBtn').disabled = true;
+
+      google.script.run
+        .withSuccessHandler(handlePullSuccess)
+        .withFailureHandler(handleError)
+        .pullNextSQ(currentBot);
+    }
+
+    function handlePullSuccess(result) {
+      hideLoading();
+
+      if (!result.success) {
+        alert(result.message || 'Failed to pull SQ');
+        document.getElementById('pullBtn').disabled = false;
+        return;
+      }
+
+      currentSQ = result.sqData;
+
+      // Display SQ data
+      document.getElementById('sqNumber').textContent = currentSQ.sqNumber;
+      document.getElementById('orderNumber').textContent = currentSQ.orderNumber || 'N/A';
+      document.getElementById('buyerName').textContent = currentSQ.buyerName || 'N/A';
+      document.getElementById('game').textContent = currentSQ.game;
+      document.getElementById('cardName').textContent = currentSQ.cardName;
+      document.getElementById('setName').textContent = currentSQ.setName;
+      document.getElementById('qty').textContent = currentSQ.qty;
+
+      document.getElementById('sqDataCard').style.display = 'block';
+
+      // Show SQ link button if available
+      if (currentSQ.sqLink) {
+        document.getElementById('openSqBtn').style.display = 'block';
+        // Auto-open SQ link
+        window.open(currentSQ.sqLink, '_blank');
+      }
+
+      // Check for missing fields
+      if (currentSQ.missingFields && currentSQ.missingFields.length > 0) {
+        missingFields = currentSQ.missingFields;
+        // Show PDF upload card to auto-fill missing fields
+        document.getElementById('pdfUploadCard').style.display = 'block';
+      } else {
+        // No missing fields, can upload directly
+        document.getElementById('uploadCard').style.display = 'block';
+      }
+    }
+
+    function showManualDataForm() {
+      const container = document.getElementById('manualFields');
+      container.innerHTML = '';
+
+      missingFields.forEach(field => {
+        const div = document.createElement('div');
+        div.className = 'mb-3';
+        div.innerHTML = `
+          <label class="form-label fw-bold">${field}</label>
+          <input type="text" class="form-control" id="manual_${field}" placeholder="Enter ${field}">
+        `;
+        container.appendChild(div);
+      });
+
+      document.getElementById('manualDataCard').style.display = 'block';
+    }
+
+    function syncManualData() {
+      // Collect manual data
+      manualData = {};
+      let allFilled = true;
+
+      missingFields.forEach(field => {
+        const value = document.getElementById('manual_' + field).value.trim();
+        if (!value) {
+          allFilled = false;
+        } else {
+          manualData[field] = value;
+        }
+      });
+
+      if (!allFilled) {
+        alert('Please fill in all missing fields');
+        return;
+      }
+
+      showLoading('Syncing manual data to Helper Doc...');
+
+      google.script.run
+        .withSuccessHandler(handleSyncSuccess)
+        .withFailureHandler(handleError)
+        .syncManualDataToHelper(currentBot, currentSQ.sqNumber, manualData);
+    }
+
+    function handleSyncSuccess(result) {
+      hideLoading();
+
+      if (!result.success) {
+        alert(result.message || 'Failed to sync manual data');
+        return;
+      }
+
+      // Update currentSQ with manual data
+      Object.assign(currentSQ, manualData);
+
+      // Update display
+      if (manualData.orderNumber) {
+        document.getElementById('orderNumber').textContent = manualData.orderNumber;
+      }
+      if (manualData.buyerName) {
+        document.getElementById('buyerName').textContent = manualData.buyerName;
+      }
+
+      // Hide manual data form
+      document.getElementById('manualDataCard').style.display = 'none';
+      missingFields = [];
+
+      // Show upload card
+      document.getElementById('uploadCard').style.display = 'block';
+
+      alert('Manual data synced successfully!');
+    }
+
+    function uploadToRefundLog() {
+      showLoading('Uploading to Refund Log...');
+      document.getElementById('uploadBtn').disabled = true;
+
+      google.script.run
+        .withSuccessHandler(handleUploadSuccess)
+        .withFailureHandler(handleError)
+        .uploadToRefundLog(currentSQ, manualData);
+    }
+
+    function handleUploadSuccess(result) {
+      hideLoading();
+
+      if (!result.success) {
+        alert(result.message || 'Failed to upload to Refund Log');
+        document.getElementById('uploadBtn').disabled = false;
+        return;
+      }
+
+      alert('Successfully uploaded to Refund Log!');
+
+      // Reset for next SQ
+      resetBotConsole();
+    }
+
+    function openSqLink() {
+      if (currentSQ && currentSQ.sqLink) {
+        window.open(currentSQ.sqLink, '_blank');
+      }
+    }
+
+    function uploadPDF() {
+      const fileInput = document.getElementById('fileInput');
+      const file = fileInput.files[0];
+      const uploadStatus = document.getElementById('uploadStatus');
+
+      if (!file) {
+        return;
+      }
+
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        uploadStatus.style.display = 'block';
+        uploadStatus.className = 'alert alert-danger';
+        uploadStatus.textContent = 'Please select a PDF file';
+        return;
+      }
+
+      uploadStatus.style.display = 'block';
+      uploadStatus.className = 'alert alert-info';
+      uploadStatus.innerHTML = '<div class="spinner-border spinner-border-sm me-2"></div>Uploading and processing PDF...';
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const base64Data = e.target.result.split(',')[1];
+
+        google.script.run
+          .withSuccessHandler(handlePDFUploadSuccess)
+          .withFailureHandler(handlePDFUploadError)
+          .processPDFUpload(currentBot, currentSQ.sqNumber, base64Data, file.name);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function handlePDFUploadSuccess(result) {
+      const uploadStatus = document.getElementById('uploadStatus');
+
+      if (!result.success) {
+        uploadStatus.className = 'alert alert-danger';
+        uploadStatus.textContent = 'Error: ' + (result.message || 'Failed to process PDF');
+        return;
+      }
+
+      uploadStatus.className = 'alert alert-success';
+      uploadStatus.innerHTML = '<i class="bi bi-check-circle me-2"></i>' + result.message;
+
+      // Update currentSQ with new data
+      if (result.orderNumber) {
+        currentSQ.orderNumber = result.orderNumber;
+        document.getElementById('orderNumber').textContent = result.orderNumber;
+      }
+      if (result.buyerName) {
+        currentSQ.buyerName = result.buyerName;
+        document.getElementById('buyerName').textContent = result.buyerName;
+      }
+
+      // Remove orderNumber and buyerName from missingFields
+      missingFields = missingFields.filter(f => f !== 'orderNumber' && f !== 'buyerName');
+
+      // Check if we still have missing fields
+      if (missingFields.length === 0) {
+        // All fields complete - hide PDF upload and manual data cards, show upload card
+        document.getElementById('pdfUploadCard').style.display = 'none';
+        document.getElementById('manualDataCard').style.display = 'none';
+        document.getElementById('uploadCard').style.display = 'block';
+      } else {
+        // Still missing some fields - show manual data form
+        showManualDataForm();
+      }
+    }
+
+    function handlePDFUploadError(error) {
+      const uploadStatus = document.getElementById('uploadStatus');
+      uploadStatus.style.display = 'block';
+      uploadStatus.className = 'alert alert-danger';
+      uploadStatus.textContent = 'Error: ' + error.message;
+      console.error('PDF upload error:', error);
+    }
+
+    function handleError(error) {
+      hideLoading();
+      alert('Error: ' + error.message);
+      console.error(error);
+    }
+  </script>
+</body>
+</html>
