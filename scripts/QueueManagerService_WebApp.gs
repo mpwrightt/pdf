@@ -36,7 +36,8 @@ const QUEUE_CONFIG = {
   VERCEL_API_URL: 'https://pdf-nine-psi.vercel.app/api/parse',
 
   // Convex API for queue coordination and real-time sync
-  CONVEX_URL: 'https://energized-spoonbill-94.convex.cloud',
+  // Note: HTTP routes use .convex.site, not .convex.cloud
+  CONVEX_URL: 'https://energized-spoonbill-94.convex.site',
 
   // Helper Doc column indices (0-based array indices)
   HELPER_COLS: {
