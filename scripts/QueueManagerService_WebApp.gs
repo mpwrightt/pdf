@@ -150,6 +150,10 @@ function doPost(e) {
         result = processPDFUpload(botId, sqNumber, params.base64Data, params.fileName);
         break;
 
+      case 'clearHelperDoc':
+        result = clearHelperDoc(botId);
+        break;
+
       default:
         result = {success: false, message: 'Unknown action: ' + action};
     }
@@ -893,18 +897,51 @@ function uploadToRefundLog(sqData, manualData) {
     SpreadsheetApp.flush();
 
     Logger.log(`Uploaded ${rowsToWrite.length} row(s) to Refund Log starting at row ${nextRow}`);
-    return {
-      success: true,
-      message: `Uploaded ${rowsToWrite.length} item(s) to Refund Log`,
-      rows: rowsToWrite.length,
-      startRow: nextRow
-    };
+
+    // Auto-clear Helper Doc after successful upload (if we have a botId)
+    // Extract botId from first item's data if available
+    const botId = items[0]?.botId;
+    let clearedRows = 0;
+
+    if (botId && QUEUE_CONFIG.HELPER_DOCS[botId]) {
+      Logger.log(`Auto-clearing Helper Doc for ${botId}...`);
+      // Release lock temporarily to allow clearHelperDoc to acquire it
+      lock.releaseLock();
+      const clearResult = clearHelperDoc(botId);
+      if (clearResult.success) {
+        clearedRows = clearResult.rowsCleared || 0;
+        Logger.log(`✓ Auto-cleared ${clearedRows} row(s) from Helper Doc`);
+      } else {
+        Logger.log(`⚠️ Failed to auto-clear Helper Doc: ${clearResult.message}`);
+      }
+      // Note: lock is already released, no need to re-acquire for return
+      return {
+        success: true,
+        message: `Uploaded ${rowsToWrite.length} item(s) to Refund Log and cleared Helper Doc`,
+        rows: rowsToWrite.length,
+        startRow: nextRow,
+        cleared: clearedRows > 0
+      };
+    } else {
+      return {
+        success: true,
+        message: `Uploaded ${rowsToWrite.length} item(s) to Refund Log`,
+        rows: rowsToWrite.length,
+        startRow: nextRow,
+        cleared: false
+      };
+    }
 
   } catch (e) {
     Logger.log('ERROR in uploadToRefundLog: ' + e);
     return {success: false, message: 'Exception: ' + e.message, rows: null};
   } finally {
-    lock.releaseLock();
+    // Only release lock if it hasn't been released already
+    try {
+      lock.releaseLock();
+    } catch (e) {
+      // Lock already released, ignore
+    }
   }
 }
 
@@ -1435,5 +1472,49 @@ function syncRefundReservationToConvex(botId, sqNumber, startRow, rowCount) {
   } catch (e) {
     Logger.log('⚠️ Error syncing refund reservation to Convex: ' + e);
     return false; // Don't fail the main operation if Convex sync fails
+  }
+}
+
+/**
+ * Clear Helper Doc sheet (remove all data rows, keep headers)
+ */
+function clearHelperDoc(botId) {
+  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
+  if (!lock) {
+    return {success: false, message: 'Failed to acquire lock'};
+  }
+
+  try {
+    const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
+    
+    if (!helperDocId) {
+      return {success: false, message: 'Helper Doc not configured for ' + botId};
+    }
+
+    const helperDoc = SpreadsheetApp.openById(helperDocId);
+    const helperSheet = helperDoc.getSheetByName(QUEUE_CONFIG.HELPER_SHEET_NAME);
+
+    if (!helperSheet) {
+      return {success: false, message: 'Helper sheet "' + QUEUE_CONFIG.HELPER_SHEET_NAME + '" not found'};
+    }
+
+    const lastRow = helperSheet.getLastRow();
+
+    if (lastRow > 2) {
+      // Clear rows 3 onwards (keep header rows 1-2)
+      helperSheet.getRange(3, 1, lastRow - 2, helperSheet.getLastColumn()).clearContent();
+      SpreadsheetApp.flush();
+      Logger.log('[' + botId + '] Cleared Helper Doc (rows 3-' + lastRow + ')');
+      return {success: true, message: 'Helper Doc cleared', rowsCleared: lastRow - 2};
+    } else {
+      Logger.log('[' + botId + '] Helper Doc already empty');
+      return {success: true, message: 'Helper Doc already empty', rowsCleared: 0};
+    }
+
+  } catch (e) {
+    Logger.log('ERROR in clearHelperDoc: ' + e);
+    return {success: false, message: 'Exception: ' + e.message};
+  } finally {
+    lock.releaseLock();
   }
 }
