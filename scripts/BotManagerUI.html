@@ -264,6 +264,7 @@
     let missingFields = [];
     let manualData = {};
     let botStatusInterval = null;
+    let sessionHeartbeatInterval = null;
 
     // Check bot status on page load and every 5 seconds
     window.addEventListener('load', function() {
@@ -300,9 +301,9 @@
         status.className = 'd-block mt-2 small';
       });
 
-      // Mark busy bots
+      // Mark busy bots (both CLAIMING and SESSION)
       claims.forEach(claim => {
-        if (claim.status === 'CLAIMING') {
+        if (claim.status === 'CLAIMING' || claim.status === 'SESSION') {
           const botNum = claim.botId.slice(-1);
           const btnId = 'bot' + botNum + 'Btn';
           const statusId = 'bot' + botNum + 'Status';
@@ -311,26 +312,66 @@
 
           btn.disabled = true;
           btn.classList.add('disabled', 'opacity-50');
-          status.textContent = '🔒 In Use - Processing SQ ' + claim.sqNumber;
+
+          if (claim.status === 'SESSION') {
+            status.textContent = '🔒 In Use - Active Session';
+          } else {
+            status.textContent = '🔒 In Use - Processing SQ ' + claim.sqNumber;
+          }
+
           status.className = 'd-block mt-2 small text-warning fw-bold';
         }
       });
     }
 
     function selectBot(botId) {
-      // Stop checking status when inside a bot console
-      if (botStatusInterval) {
-        clearInterval(botStatusInterval);
-        botStatusInterval = null;
-      }
+      // Try to acquire session lock
+      showLoading('Acquiring bot session...');
 
-      currentBot = botId;
-      document.getElementById('botSelection').style.display = 'none';
-      document.getElementById('botConsole').style.display = 'block';
-      document.getElementById('currentBotName').textContent = botId;
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+
+          if (!result.success) {
+            alert(result.message || 'Failed to acquire bot session');
+            return;
+          }
+
+          // Stop checking status when inside a bot console
+          if (botStatusInterval) {
+            clearInterval(botStatusInterval);
+            botStatusInterval = null;
+          }
+
+          currentBot = botId;
+          document.getElementById('botSelection').style.display = 'none';
+          document.getElementById('botConsole').style.display = 'block';
+          document.getElementById('currentBotName').textContent = botId;
+
+          // Start session heartbeat (renew every 2 minutes)
+          sessionHeartbeatInterval = setInterval(function() {
+            renewSessionLock(botId);
+          }, 120000); // 2 minutes
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          alert('Error: ' + error.message);
+        })
+        .acquireBotSession(botId);
     }
 
     function backToSelection() {
+      // Stop session heartbeat
+      if (sessionHeartbeatInterval) {
+        clearInterval(sessionHeartbeatInterval);
+        sessionHeartbeatInterval = null;
+      }
+
+      // Release session lock
+      if (currentBot) {
+        google.script.run.releaseBotSession(currentBot);
+      }
+
       document.getElementById('botSelection').style.display = 'block';
       document.getElementById('botConsole').style.display = 'none';
       resetBotConsole();
@@ -379,29 +420,45 @@
         return;
       }
 
+      // sqData is now an array of items - store the whole array
       currentSQ = result.sqData;
 
-      // Display SQ data
-      document.getElementById('sqNumber').textContent = currentSQ.sqNumber;
-      document.getElementById('orderNumber').textContent = currentSQ.orderNumber || 'N/A';
-      document.getElementById('buyerName').textContent = currentSQ.buyerName || 'N/A';
-      document.getElementById('game').textContent = currentSQ.game;
-      document.getElementById('cardName').textContent = currentSQ.cardName;
-      document.getElementById('setName').textContent = currentSQ.setName;
-      document.getElementById('qty').textContent = currentSQ.qty;
+      // Display SQ data from FIRST item (all items share same SQ#, order, buyer)
+      const firstItem = Array.isArray(currentSQ) ? currentSQ[0] : currentSQ;
+
+      if (!firstItem) {
+        alert('No SQ data returned');
+        document.getElementById('pullBtn').disabled = false;
+        return;
+      }
+
+      document.getElementById('sqNumber').textContent = firstItem.sqNumber;
+      document.getElementById('orderNumber').textContent = firstItem.orderNumber || 'N/A';
+      document.getElementById('buyerName').textContent = firstItem.buyerName || 'N/A';
+      document.getElementById('game').textContent = firstItem.game;
+      document.getElementById('cardName').textContent = firstItem.cardName;
+      document.getElementById('setName').textContent = firstItem.setName;
+
+      // Show total quantity if array, otherwise single item qty
+      if (Array.isArray(currentSQ)) {
+        const totalQty = currentSQ.reduce((sum, item) => sum + (parseInt(item.qty) || 1), 0);
+        document.getElementById('qty').textContent = `${totalQty} items (${currentSQ.length} rows)`;
+      } else {
+        document.getElementById('qty').textContent = currentSQ.qty;
+      }
 
       document.getElementById('sqDataCard').style.display = 'block';
 
       // Show SQ link button if available
-      if (currentSQ.sqLink) {
+      if (firstItem.sqLink) {
         document.getElementById('openSqBtn').style.display = 'block';
         // Auto-open SQ link
-        window.open(currentSQ.sqLink, '_blank');
+        window.open(firstItem.sqLink, '_blank');
       }
 
-      // Check for missing fields
-      if (currentSQ.missingFields && currentSQ.missingFields.length > 0) {
-        missingFields = currentSQ.missingFields;
+      // Check for missing fields (from response root, not item)
+      if (result.missingFields && result.missingFields.length > 0) {
+        missingFields = result.missingFields;
         // Show PDF upload card to auto-fill missing fields
         document.getElementById('pdfUploadCard').style.display = 'block';
       } else {
@@ -414,30 +471,87 @@
       const container = document.getElementById('manualFields');
       container.innerHTML = '';
 
-      missingFields.forEach(field => {
-        const div = document.createElement('div');
-        div.className = 'mb-3';
-        div.innerHTML = `
-          <label class="form-label fw-bold">${field}</label>
-          <input type="text" class="form-control" id="manual_${field}" placeholder="Enter ${field}">
+      // currentSQ is an array of items - show form for each row with missing data
+      const items = Array.isArray(currentSQ) ? currentSQ : [currentSQ];
+
+      items.forEach((item, idx) => {
+        // Check if this row is missing order or buyer
+        const needsOrder = !item.orderNumber;
+        const needsBuyer = !item.buyerName;
+
+        if (!needsOrder && !needsBuyer) return; // Skip rows with complete data
+
+        const rowDiv = document.createElement('div');
+        rowDiv.className = 'card mb-3';
+        rowDiv.innerHTML = `
+          <div class="card-body">
+            <h6 class="card-title fw-bold mb-3">Row ${idx + 1} - Card Details</h6>
+            <div class="row mb-3">
+              <div class="col-md-6">
+                <small class="text-muted">Card:</small>
+                <div class="fw-bold">${item.cardName || 'N/A'}</div>
+              </div>
+              <div class="col-md-3">
+                <small class="text-muted">Qty:</small>
+                <div class="fw-bold">${item.qty || '1'}</div>
+              </div>
+              <div class="col-md-3">
+                <small class="text-muted">Condition:</small>
+                <div class="fw-bold">${item.condition || 'N/A'}</div>
+              </div>
+            </div>
+            <div class="row mb-3">
+              <div class="col-md-8">
+                <small class="text-muted">Set:</small>
+                <div>${item.setName || 'N/A'}</div>
+              </div>
+              <div class="col-md-4">
+                <small class="text-muted">Collector #:</small>
+                <div>${item.collectorNum || 'N/A'}</div>
+              </div>
+            </div>
+            ${needsOrder ? `
+              <div class="mb-2">
+                <label class="form-label fw-bold">Order Number</label>
+                <input type="text" class="form-control" data-row="${idx}" data-field="orderNumber" placeholder="Enter order number for this card">
+              </div>
+            ` : ''}
+            ${needsBuyer ? `
+              <div class="mb-2">
+                <label class="form-label fw-bold">Buyer Name</label>
+                <input type="text" class="form-control" data-row="${idx}" data-field="buyerName" placeholder="Enter buyer name for this card">
+              </div>
+            ` : ''}
+          </div>
         `;
-        container.appendChild(div);
+        container.appendChild(rowDiv);
       });
 
       document.getElementById('manualDataCard').style.display = 'block';
     }
 
     function syncManualData() {
-      // Collect manual data
-      manualData = {};
+      // Collect manual data from all input fields
+      const inputs = document.querySelectorAll('#manualFields input[data-row]');
       let allFilled = true;
 
-      missingFields.forEach(field => {
-        const value = document.getElementById('manual_' + field).value.trim();
+      inputs.forEach(input => {
+        const rowIdx = parseInt(input.getAttribute('data-row'));
+        const field = input.getAttribute('data-field');
+        const value = input.value.trim();
+
         if (!value) {
           allFilled = false;
+          input.classList.add('is-invalid');
         } else {
-          manualData[field] = value;
+          input.classList.remove('is-invalid');
+
+          // Update the corresponding item in currentSQ array
+          if (Array.isArray(currentSQ) && currentSQ[rowIdx]) {
+            currentSQ[rowIdx][field] = value;
+          } else if (!Array.isArray(currentSQ)) {
+            currentSQ[field] = value;
+          }
         }
       });
 
@@ -446,15 +560,17 @@
         return;
       }
 
-      showLoading('Syncing manual data to Helper Doc...');
+      showLoading('Updating Helper Doc with manual data...');
 
+      // Since data is per-row and may be different for each row, we need to sync ALL items
+      // Call server to update Helper Doc with the complete currentSQ array
       google.script.run
-        .withSuccessHandler(handleSyncSuccess)
+        .withSuccessHandler(handleManualSyncSuccess)
         .withFailureHandler(handleError)
-        .syncManualDataToHelper(currentBot, currentSQ.sqNumber, manualData);
+        .syncAllItemsToHelper(currentBot, currentSQ);
     }
 
-    function handleSyncSuccess(result) {
+    function handleManualSyncSuccess(result) {
       hideLoading();
 
       if (!result.success) {
@@ -462,15 +578,13 @@
         return;
       }
 
-      // Update currentSQ with manual data
-      Object.assign(currentSQ, manualData);
-
-      // Update display
-      if (manualData.orderNumber) {
-        document.getElementById('orderNumber').textContent = manualData.orderNumber;
+      // Update display with first item's data (representative)
+      const firstItem = Array.isArray(currentSQ) ? currentSQ[0] : currentSQ;
+      if (firstItem.orderNumber) {
+        document.getElementById('orderNumber').textContent = firstItem.orderNumber;
       }
-      if (manualData.buyerName) {
-        document.getElementById('buyerName').textContent = manualData.buyerName;
+      if (firstItem.buyerName) {
+        document.getElementById('buyerName').textContent = firstItem.buyerName;
       }
 
       // Hide manual data form
@@ -487,10 +601,15 @@
       showLoading('Uploading to Refund Log...');
       document.getElementById('uploadBtn').disabled = true;
 
+      // Get sqNumber from currentSQ (array or single object)
+      const sqNumber = Array.isArray(currentSQ) ? currentSQ[0].sqNumber : currentSQ.sqNumber;
+
+      // New simplified approach: just pass botId and sqNumber
+      // Server will read directly from Helper Doc
       google.script.run
         .withSuccessHandler(handleUploadSuccess)
         .withFailureHandler(handleError)
-        .uploadToRefundLog(currentSQ, manualData);
+        .uploadToRefundLog(currentBot, sqNumber);
     }
 
     function handleUploadSuccess(result) {
@@ -509,8 +628,11 @@
     }
 
     function openSqLink() {
-      if (currentSQ && currentSQ.sqLink) {
-        window.open(currentSQ.sqLink, '_blank');
+      if (currentSQ) {
+        const sqLink = Array.isArray(currentSQ) ? currentSQ[0].sqLink : currentSQ.sqLink;
+        if (sqLink) {
+          window.open(sqLink, '_blank');
+        }
       }
     }
 
@@ -538,10 +660,13 @@
       reader.onload = function(e) {
         const base64Data = e.target.result.split(',')[1];
 
+        // Get sqNumber from first item (currentSQ is now an array)
+        const sqNumber = Array.isArray(currentSQ) ? currentSQ[0].sqNumber : currentSQ.sqNumber;
+
         google.script.run
           .withSuccessHandler(handlePDFUploadSuccess)
           .withFailureHandler(handlePDFUploadError)
-          .processPDFUpload(currentBot, currentSQ.sqNumber, base64Data, file.name);
+          .processPDFUpload(currentBot, sqNumber, base64Data, file.name);
       };
       reader.readAsDataURL(file);
     }
@@ -558,14 +683,23 @@
       uploadStatus.className = 'alert alert-success';
       uploadStatus.innerHTML = '<i class="bi bi-check-circle me-2"></i>' + result.message;
 
-      // Update currentSQ with new data
-      if (result.orderNumber) {
-        currentSQ.orderNumber = result.orderNumber;
-        document.getElementById('orderNumber').textContent = result.orderNumber;
-      }
-      if (result.buyerName) {
-        currentSQ.buyerName = result.buyerName;
-        document.getElementById('buyerName').textContent = result.buyerName;
+      // Replace currentSQ with updatedItems from server (has per-row order/buyer data)
+      if (result.updatedItems && result.updatedItems.length > 0) {
+        // Preserve sqLink from original currentSQ array
+        const originalSqLink = (Array.isArray(currentSQ) && currentSQ.length > 0) ? currentSQ[0].sqLink : '';
+
+        // Update currentSQ with new data and add sqLink to each item
+        currentSQ = result.updatedItems.map(item => ({
+          ...item,
+          sqLink: originalSqLink
+        }));
+
+        // Update display with first item's data
+        const firstItem = currentSQ[0];
+        document.getElementById('orderNumber').textContent = firstItem.orderNumber || 'Multiple orders';
+        document.getElementById('buyerName').textContent = firstItem.buyerName || 'Multiple buyers';
+
+        console.log('Updated currentSQ after PDF:', currentSQ);
       }
 
       // Remove orderNumber and buyerName from missingFields
@@ -596,6 +730,42 @@
       alert('Error: ' + error.message);
       console.error(error);
     }
+
+    function renewSessionLock(botId) {
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (!result.success) {
+            console.warn('Session renewal failed:', result.message);
+            // Session was lost - likely another user took over
+            alert('Your session has expired. Another user may have accessed this bot.');
+            backToSelection();
+          } else {
+            console.log('Session renewed successfully');
+          }
+        })
+        .withFailureHandler(function(error) {
+          console.error('Session renewal error:', error);
+        })
+        .renewBotSession(botId);
+    }
+
+    // Release session on page unload
+    window.addEventListener('beforeunload', function() {
+      if (currentBot && sessionHeartbeatInterval) {
+        // Use navigator.sendBeacon for reliable delivery during page unload
+        const url = window.location.href.split('?')[0];
+        const params = new URLSearchParams({
+          action: 'releaseBotSession',
+          botId: currentBot
+        });
+
+        try {
+          navigator.sendBeacon(url + '?' + params.toString());
+        } catch (e) {
+          console.error('Failed to release session on unload:', e);
+        }
+      }
+    });
   </script>
 </body>
 </html>

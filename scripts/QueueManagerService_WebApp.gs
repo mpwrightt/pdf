@@ -154,6 +154,18 @@ function doPost(e) {
         result = clearHelperDoc(botId);
         break;
 
+      case 'acquireBotSession':
+        result = acquireBotSession(botId);
+        break;
+
+      case 'releaseBotSession':
+        result = releaseBotSession(botId);
+        break;
+
+      case 'renewBotSession':
+        result = renewBotSession(botId);
+        break;
+
       default:
         result = {success: false, message: 'Unknown action: ' + action};
     }
@@ -401,7 +413,7 @@ function releaseRefundLogReservation(botId, sqNumber) {
 }
 
 /**
- * Get list of all active claims (for monitoring/debugging)
+ * Get list of all active claims and sessions (for monitoring/debugging)
  */
 function getActiveClaims() {
   const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
@@ -417,10 +429,18 @@ function getActiveClaims() {
 
     const data = queueSheet.getDataRange().getValues();
     const claims = [];
+    const now = new Date();
 
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       if (row[0]) { // Has bot ID
+        const age = now - new Date(row[3]);
+
+        // Skip stale sessions (> 5 minutes old)
+        if (row[2] === 'SESSION' && age > 300000) {
+          continue;
+        }
+
         claims.push({
           botId: row[0],
           sqNumber: row[1],
@@ -707,27 +727,11 @@ function pullNextSQ(botId) {
 
         Logger.log('[' + botId + '] ✓ Claimed ' + itemsForSQ.length + ' rows for SQ ' + sqNumber);
 
-        // Prepare SQ data to return (use first item as representative)
-        const firstItem = itemsForSQ[0];
-        const sqData = {
-          sqNumber: sqNumber,
-          orderNumber: '', // Will be filled from Helper Doc
-          buyerName: '', // Will be filled from Helper Doc
-          game: firstItem.game,
-          cardName: firstItem.cardName,
-          collectorNum: firstItem.collectorNum,
-          rarity: firstItem.rarity,
-          setName: firstItem.setName,
-          condition: firstItem.condition,
-          qty: firstItem.qty,
-          sqLink: '', // Will be extracted from Helper Doc cell G3
-          rowIndex: firstItem.rowIndex,
-          totalRows: itemsForSQ.length
-        };
-
-        // Write ALL rows to Helper Doc and check for missing data
+        // Write ALL rows to Helper Doc and read back complete data
         const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
         const missingFields = [];
+        let completeItems = []; // Will be populated from Helper Doc
+        let sqLink = '';
 
         if (helperDocId) {
           try {
@@ -765,7 +769,6 @@ function pullNextSQ(botId) {
 
               // Get SQ link from cell G3 (column 7)
               const sqLinkCell = helperSheet.getRange(3, 7); // Column G
-              let sqLink = null;
 
               // Try to get URL from rich text value
               try {
@@ -790,35 +793,70 @@ function pullNextSQ(botId) {
                 }
               }
 
-              // Update sqData with SQ link
-              if (sqLink) {
-                sqData.sqLink = sqLink;
+              // Read ALL rows back from Helper Doc to get complete data with order/buyer info
+              // Columns: H=Order#, I=Buyer, J=SQ#, K=Game, L=Card, M=Collector#, N=Rarity, O=Set, P=Condition, Q=Qty
+              const allHelperData = helperSheet.getRange(3, 8, itemsForSQ.length, 10).getValues(); // Columns H-Q (8-17)
+
+              // Check if ANY row is missing order/buyer data
+              // Note: An SQ can have items from multiple orders, so we check all rows
+              let hasAnyMissingOrder = false;
+              let hasAnyMissingBuyer = false;
+
+              for (let i = 0; i < allHelperData.length; i++) {
+                if (!allHelperData[i][0]) hasAnyMissingOrder = true;  // Column H
+                if (!allHelperData[i][1]) hasAnyMissingBuyer = true;   // Column I
               }
 
-              // Now check for Order Number and Buyer Name (columns H and I) in first row
-              // getRange uses 1-based column numbers: H=8, I=9
-              const helperOrderNum = helperSheet.getRange(3, 8).getValue(); // Column H
-              const helperBuyerName = helperSheet.getRange(3, 9).getValue(); // Column I
+              if (hasAnyMissingOrder) missingFields.push('orderNumber');
+              if (hasAnyMissingBuyer) missingFields.push('buyerName');
 
-              if (!helperOrderNum) missingFields.push('orderNumber');
-              if (!helperBuyerName) missingFields.push('buyerName');
+              // Create array of items with complete data from Helper Doc
+              completeItems = allHelperData.map((row, idx) => {
+                const orderNum = row[0]; // Column H
+                const buyerName = row[1]; // Column I
+                const sqNum = row[2]; // Column J
+                const game = row[3]; // Column K
+                const cardName = row[4]; // Column L
+                const collectorNum = row[5]; // Column M
+                const rarity = row[6]; // Column N
+                const setName = row[7]; // Column O
+                const condition = row[8]; // Column P
+                const qty = row[9]; // Column Q
 
-              // Update sqData with Helper Doc data if available
-              if (helperOrderNum) sqData.orderNumber = helperOrderNum;
-              if (helperBuyerName) sqData.buyerName = helperBuyerName;
+                return {
+                  sqNumber: sqNum,
+                  orderNumber: orderNum || '',
+                  buyerName: buyerName || '',
+                  game: game || 'Magic: The Gathering',
+                  cardName: cardName || '',
+                  collectorNum: collectorNum || '',
+                  rarity: rarity || '',
+                  setName: setName || '',
+                  condition: condition || '',
+                  qty: qty || 1,
+                  sqLink: sqLink || ''
+                };
+              });
+
+              Logger.log('[' + botId + '] Read back ' + completeItems.length + ' complete items from Helper Doc');
             }
           } catch (helperError) {
             Logger.log('Warning: Could not access Helper Doc for ' + botId + ': ' + helperError);
           }
         }
 
-        sqData.missingFields = missingFields;
-
         // Success! Release queue reservation
         releaseSQ(botId, sqNumber);
 
         Logger.log('[' + botId + '] 🎉 Successfully claimed SQ ' + sqNumber + ' (' + itemsForSQ.length + ' rows)' + (missingFields.length > 0 ? ' - Missing: ' + missingFields.join(', ') : ' - Complete'));
-        return {success: true, message: 'SQ claimed successfully', sqData: sqData};
+        return {
+          success: true,
+          message: 'SQ claimed successfully',
+          sqData: completeItems, // Return array of all items, not single object
+          sqNumber: sqNumber,
+          totalRows: itemsForSQ.length,
+          missingFields: missingFields
+        };
 
       } catch (claimError) {
         Logger.log('[' + botId + '] ERROR: Failed to claim SQ ' + sqNumber + ': ' + claimError);
@@ -840,16 +878,66 @@ function pullNextSQ(botId) {
 }
 
 /**
- * Upload SQ data to Refund Log
- * Accepts either a single item or an array of items
+ * Upload SQ data to Refund Log by reading directly from Helper Doc
+ * Much simpler and more reliable than passing data through UI
  */
-function uploadToRefundLog(sqData, manualData) {
+function uploadToRefundLog(botId, sqNumber) {
   const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
   if (!lock) {
     return {success: false, message: 'Failed to acquire lock', rows: null};
   }
 
   try {
+    // Get Helper Doc for this bot
+    const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
+    if (!helperDocId) {
+      return {success: false, message: 'Helper Doc not configured for ' + botId, rows: null};
+    }
+
+    const helperDoc = SpreadsheetApp.openById(helperDocId);
+    const helperSheet = helperDoc.getSheetByName(QUEUE_CONFIG.HELPER_SHEET_NAME);
+
+    if (!helperSheet) {
+      return {success: false, message: 'Helper sheet not found', rows: null};
+    }
+
+    // Read ALL data from Helper Doc
+    const helperData = helperSheet.getDataRange().getValues();
+
+    // Find all rows for this SQ (starting from row 3, rows 1-2 are headers)
+    const rowsForSQ = [];
+    for (let i = 2; i < helperData.length; i++) {
+      const row = helperData[i];
+      const rowSQ = row[QUEUE_CONFIG.HELPER_COLS.SQ_NUMBER];
+
+      if (rowSQ === sqNumber) {
+        rowsForSQ.push({
+          orderNumber: row[QUEUE_CONFIG.HELPER_COLS.ORDER_NUMBER] || '',
+          buyerName: row[QUEUE_CONFIG.HELPER_COLS.BUYER_NAME] || '',
+          sqNumber: row[QUEUE_CONFIG.HELPER_COLS.SQ_NUMBER] || '',
+          game: row[QUEUE_CONFIG.HELPER_COLS.GAME] || 'Magic: The Gathering',
+          cardName: row[QUEUE_CONFIG.HELPER_COLS.CARD_NAME] || '',
+          collectorNum: row[QUEUE_CONFIG.HELPER_COLS.COLLECTOR_NUM] || '',
+          rarity: row[QUEUE_CONFIG.HELPER_COLS.RARITY] || '',
+          setName: row[QUEUE_CONFIG.HELPER_COLS.SET_NAME] || '',
+          condition: row[QUEUE_CONFIG.HELPER_COLS.CONDITION] || '',
+          qty: row[QUEUE_CONFIG.HELPER_COLS.QTY] || 1
+        });
+      }
+    }
+
+    if (rowsForSQ.length === 0) {
+      return {success: false, message: 'No data found in Helper Doc for SQ ' + sqNumber, rows: null};
+    }
+
+    Logger.log(`uploadToRefundLog: Found ${rowsForSQ.length} rows in Helper Doc for SQ ${sqNumber}`);
+
+    // Log first 3 items
+    for (let i = 0; i < Math.min(3, rowsForSQ.length); i++) {
+      Logger.log(`  Row ${i + 1}: order="${rowsForSQ[i].orderNumber}", buyer="${rowsForSQ[i].buyerName}", card="${rowsForSQ[i].cardName}"`);
+    }
+
+    // Open Refund Log
     const refundLog = SpreadsheetApp.openById(QUEUE_CONFIG.REFUND_LOG_ID);
     const refundSheet = refundLog.getSheetByName('Refund Log');
 
@@ -857,91 +945,52 @@ function uploadToRefundLog(sqData, manualData) {
       return {success: false, message: 'Refund Log sheet not found', rows: null};
     }
 
-    // Check if sqData is an array of items (from Helper Doc with multiple rows)
-    // or a single item (from Web UI manual entry)
-    const items = Array.isArray(sqData) ? sqData : [sqData];
-
-    Logger.log(`uploadToRefundLog: Processing ${items.length} item(s)`);
-
     // Get next available row
     const nextRow = refundSheet.getLastRow() + 1;
 
-    // Prepare all rows
-    const rowsToWrite = items.map(item => {
-      // Merge item with manualData if provided (manualData takes precedence)
-      const finalData = manualData ? Object.assign({}, item, manualData) : item;
-
-      // Prepare row data matching HelperDocAutomation.gs REFUND_COLS
-      // Use array indices to match exact column positions
-      const rowData = Array(12).fill(''); // Initialize array for columns A-L (0-11)
-      rowData[0] = new Date();                              // Column A (Date)
-      // rowData[1] stays empty                             // Column B (order link or formula)
-      rowData[2] = finalData.orderNumber || '';             // Column C
-      rowData[3] = finalData.buyerName || '';               // Column D
-      rowData[4] = finalData.sqNumber || '';                // Column E
-      rowData[5] = finalData.game || 'Magic: The Gathering';// Column F
-      rowData[6] = finalData.cardName || '';                // Column G
-      rowData[7] = finalData.collectorNum || finalData.collectorNumber || ''; // Column H
-      rowData[8] = finalData.rarity || '';                  // Column I
-      rowData[9] = finalData.setName || '';                 // Column J
-      rowData[10] = finalData.condition || '';              // Column K
-      rowData[11] = finalData.qty || finalData.quantity || 1; // Column L
-
+    // Prepare all rows for Refund Log
+    const rowsToWrite = rowsForSQ.map(item => {
+      const rowData = Array(12).fill(''); // Columns A-L
+      rowData[0] = new Date();                    // Column A (Date)
+      // rowData[1] stays empty                   // Column B (order link or formula)
+      rowData[2] = item.orderNumber;              // Column C
+      rowData[3] = item.buyerName;                // Column D
+      rowData[4] = item.sqNumber;                 // Column E
+      rowData[5] = item.game;                     // Column F
+      rowData[6] = item.cardName;                 // Column G
+      rowData[7] = item.collectorNum;             // Column H
+      rowData[8] = item.rarity;                   // Column I
+      rowData[9] = item.setName;                  // Column J
+      rowData[10] = item.condition;               // Column K
+      rowData[11] = item.qty;                     // Column L
       return rowData;
     });
 
     // Write all rows to Refund Log at once
     refundSheet.getRange(nextRow, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
-    // Format date column for all rows
+    // Format date column
     refundSheet.getRange(nextRow, 1, rowsToWrite.length, 1).setNumberFormat('m/d/yyyy');
     SpreadsheetApp.flush();
 
-    Logger.log(`Uploaded ${rowsToWrite.length} row(s) to Refund Log starting at row ${nextRow}`);
+    Logger.log(`✓ Uploaded ${rowsToWrite.length} rows to Refund Log starting at row ${nextRow}`);
 
-    // Auto-clear Helper Doc after successful upload (if we have a botId)
-    // Extract botId from first item's data if available
-    const botId = items[0]?.botId;
-    let clearedRows = 0;
+    // Clear Helper Doc after successful upload
+    helperSheet.getRange(3, 1, helperSheet.getLastRow() - 2, helperSheet.getLastColumn()).clearContent();
+    SpreadsheetApp.flush();
+    Logger.log(`✓ Cleared Helper Doc for ${botId}`);
 
-    if (botId && QUEUE_CONFIG.HELPER_DOCS[botId]) {
-      Logger.log(`Auto-clearing Helper Doc for ${botId}...`);
-      // Release lock temporarily to allow clearHelperDoc to acquire it
-      lock.releaseLock();
-      const clearResult = clearHelperDoc(botId);
-      if (clearResult.success) {
-        clearedRows = clearResult.rowsCleared || 0;
-        Logger.log(`✓ Auto-cleared ${clearedRows} row(s) from Helper Doc`);
-      } else {
-        Logger.log(`⚠️ Failed to auto-clear Helper Doc: ${clearResult.message}`);
-      }
-      // Note: lock is already released, no need to re-acquire for return
-      return {
-        success: true,
-        message: `Uploaded ${rowsToWrite.length} item(s) to Refund Log and cleared Helper Doc`,
-        rows: rowsToWrite.length,
-        startRow: nextRow,
-        cleared: clearedRows > 0
-      };
-    } else {
-      return {
-        success: true,
-        message: `Uploaded ${rowsToWrite.length} item(s) to Refund Log`,
-        rows: rowsToWrite.length,
-        startRow: nextRow,
-        cleared: false
-      };
-    }
+    return {
+      success: true,
+      message: `Uploaded ${rowsToWrite.length} item(s) to Refund Log`,
+      rows: rowsToWrite.length,
+      startRow: nextRow
+    };
 
   } catch (e) {
     Logger.log('ERROR in uploadToRefundLog: ' + e);
     return {success: false, message: 'Exception: ' + e.message, rows: null};
   } finally {
-    // Only release lock if it hasn't been released already
-    try {
-      lock.releaseLock();
-    } catch (e) {
-      // Lock already released, ignore
-    }
+    lock.releaseLock();
   }
 }
 
@@ -997,6 +1046,57 @@ function syncManualDataToHelper(botId, sqNumber, manualData) {
 
   } catch (e) {
     Logger.log('ERROR in syncManualDataToHelper: ' + e);
+    return {success: false, message: 'Exception: ' + e.message};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Sync ALL items to Helper Doc
+ * Updates Helper Doc with complete array of items (each row may have different order/buyer)
+ */
+function syncAllItemsToHelper(botId, items) {
+  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
+  if (!lock) {
+    return {success: false, message: 'Failed to acquire lock'};
+  }
+
+  try {
+    const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
+
+    if (!helperDocId) {
+      return {success: false, message: 'Helper Doc not configured for ' + botId};
+    }
+
+    const helperDoc = SpreadsheetApp.openById(helperDocId);
+    const helperSheet = helperDoc.getSheetByName(QUEUE_CONFIG.HELPER_SHEET_NAME);
+
+    if (!helperSheet) {
+      return {success: false, message: 'Helper sheet "' + QUEUE_CONFIG.HELPER_SHEET_NAME + '" not found'};
+    }
+
+    // Update each row with corresponding item data
+    // Helper Doc columns: H=Order#, I=Buyer, J=SQ#, K=Game, L=Card, M=Collector#, N=Rarity, O=Set, P=Condition, Q=Qty
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const rowNum = i + 3; // Start from row 3 (rows 1-2 are headers)
+
+      // Update columns H (Order#) and I (Buyer) for this row
+      if (item.orderNumber) {
+        helperSheet.getRange(rowNum, 8).setValue(item.orderNumber); // Column H
+      }
+      if (item.buyerName) {
+        helperSheet.getRange(rowNum, 9).setValue(item.buyerName); // Column I
+      }
+    }
+
+    SpreadsheetApp.flush();
+    Logger.log('[' + botId + '] Synced ' + items.length + ' items to Helper Doc');
+    return {success: true, message: 'All items synced to Helper Doc'};
+
+  } catch (e) {
+    Logger.log('ERROR in syncAllItemsToHelper: ' + e);
     return {success: false, message: 'Exception: ' + e.message};
   } finally {
     lock.releaseLock();
@@ -1354,11 +1454,52 @@ function fillOrderInfo(botId, sqNumber, parsedOrders) {
       return {success: false, message: 'No matching cards found in PDF'};
     }
 
+    // Read back ALL updated rows from Helper Doc to get per-row order/buyer data
+    SpreadsheetApp.flush(); // Make sure all writes are committed before reading
+
+    const updatedItems = [];
+
+    // Re-read the ENTIRE Helper Doc to get fresh data after our writes
+    const freshData = helperSheet.getDataRange().getValues();
+    Logger.log('Re-read Helper Doc - total rows: ' + freshData.length);
+
+    for (let i = 2; i < freshData.length; i++) {
+      const row = freshData[i];
+      const rowSQ = row[QUEUE_CONFIG.HELPER_COLS.SQ_NUMBER];
+
+      if (rowSQ !== sqNumber) continue;
+      if (!row[QUEUE_CONFIG.HELPER_COLS.CARD_NAME]) continue;
+
+      // Log the RAW data from the row to see what we're actually reading
+      Logger.log('  Row ' + (i + 1) + ' RAW data:');
+      Logger.log('    Column H (index 7, orderNumber): "' + row[7] + '" (type: ' + typeof row[7] + ')');
+      Logger.log('    Column I (index 8, buyerName): "' + row[8] + '" (type: ' + typeof row[8] + ')');
+      Logger.log('    Column L (index 11, cardName): "' + row[11] + '"');
+
+      const item = {
+        orderNumber: row[QUEUE_CONFIG.HELPER_COLS.ORDER_NUMBER] || '',  // Column H (index 7)
+        buyerName: row[QUEUE_CONFIG.HELPER_COLS.BUYER_NAME] || '',      // Column I (index 8)
+        sqNumber: row[QUEUE_CONFIG.HELPER_COLS.SQ_NUMBER],              // Column J (index 9)
+        game: row[QUEUE_CONFIG.HELPER_COLS.GAME],                       // Column K (index 10)
+        cardName: row[QUEUE_CONFIG.HELPER_COLS.CARD_NAME],              // Column L (index 11)
+        collectorNum: row[QUEUE_CONFIG.HELPER_COLS.COLLECTOR_NUM],      // Column M (index 12)
+        rarity: row[QUEUE_CONFIG.HELPER_COLS.RARITY],                   // Column N (index 13)
+        setName: row[QUEUE_CONFIG.HELPER_COLS.SET_NAME],                // Column O (index 14)
+        condition: row[QUEUE_CONFIG.HELPER_COLS.CONDITION],             // Column P (index 15)
+        qty: row[QUEUE_CONFIG.HELPER_COLS.QTY]                          // Column Q (index 16)
+      };
+
+      Logger.log('  Item ' + (updatedItems.length + 1) + ': ' + item.cardName + ' → Order: "' + item.orderNumber + '", Buyer: "' + item.buyerName + '"');
+      updatedItems.push(item);
+    }
+
+    Logger.log('Total updatedItems: ' + updatedItems.length);
+
     return {
       success: true,
       matchCount: matchCount,
-      orderNumber: orderNumber,
-      buyerName: buyerName
+      message: 'Matched ' + matchCount + ' items',
+      updatedItems: updatedItems  // Return complete array with per-row data
     };
 
   } catch (e) {
@@ -1439,6 +1580,155 @@ function syncCompletionToConvex(botId, sqNumber) {
 }
 
 /**
+ * Acquire exclusive session lock for a bot
+ * Prevents multiple users from using the same bot simultaneously
+ */
+function acquireBotSession(botId) {
+  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
+  if (!lock) {
+    return {success: false, message: 'Failed to acquire lock'};
+  }
+
+  try {
+    const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
+    const queueSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_QUEUE_SHEET_NAME);
+
+    if (!queueSheet) {
+      return {success: false, message: 'BOTS sheet not found'};
+    }
+
+    const timestamp = new Date();
+    const data = queueSheet.getDataRange().getValues();
+
+    // Check if bot already has an active session
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const queueBotId = row[0];
+      const queueSQ = row[1];
+      const queueStatus = row[2];
+      const queueTimestamp = row[3];
+
+      if (queueBotId === botId && queueStatus === 'SESSION') {
+        const age = timestamp - new Date(queueTimestamp);
+
+        // If session is recent (< 5 minutes), reject new session
+        if (age < 300000) { // 5 minutes
+          return {
+            success: false,
+            message: 'Bot is already in use by another user'
+          };
+        }
+
+        // Session is stale, delete it
+        queueSheet.deleteRow(i + 1);
+        break;
+      }
+    }
+
+    // Create new session lock
+    const nextRow = queueSheet.getLastRow() + 1;
+    queueSheet.getRange(nextRow, 1, 1, 4).setValues([[
+      botId,
+      'SESSION', // SQ column used for session marker
+      'SESSION', // Status
+      timestamp
+    ]]);
+
+    SpreadsheetApp.flush();
+
+    Logger.log('[' + botId + '] Session lock acquired');
+    return {success: true, message: 'Session acquired'};
+
+  } catch (e) {
+    Logger.log('ERROR in acquireBotSession: ' + e);
+    return {success: false, message: 'Exception: ' + e.message};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Release bot session lock
+ */
+function releaseBotSession(botId) {
+  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
+  if (!lock) {
+    return {success: false, message: 'Failed to acquire lock'};
+  }
+
+  try {
+    const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
+    const queueSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_QUEUE_SHEET_NAME);
+
+    if (!queueSheet) {
+      return {success: false, message: 'BOTS sheet not found'};
+    }
+
+    const data = queueSheet.getDataRange().getValues();
+
+    // Find and delete session lock
+    for (let i = data.length - 1; i >= 1; i--) {
+      const row = data[i];
+      if (row[0] === botId && row[2] === 'SESSION') {
+        queueSheet.deleteRow(i + 1);
+        SpreadsheetApp.flush();
+        Logger.log('[' + botId + '] Session lock released');
+        return {success: true, message: 'Session released'};
+      }
+    }
+
+    return {success: false, message: 'No session found'};
+
+  } catch (e) {
+    Logger.log('ERROR in releaseBotSession: ' + e);
+    return {success: false, message: 'Exception: ' + e.message};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Renew bot session lock (heartbeat)
+ */
+function renewBotSession(botId) {
+  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
+  if (!lock) {
+    return {success: false, message: 'Failed to acquire lock'};
+  }
+
+  try {
+    const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
+    const queueSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_QUEUE_SHEET_NAME);
+
+    if (!queueSheet) {
+      return {success: false, message: 'BOTS sheet not found'};
+    }
+
+    const data = queueSheet.getDataRange().getValues();
+    const timestamp = new Date();
+
+    // Find and update session timestamp
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      if (row[0] === botId && row[2] === 'SESSION') {
+        queueSheet.getRange(i + 1, 4).setValue(timestamp);
+        SpreadsheetApp.flush();
+        return {success: true, message: 'Session renewed'};
+      }
+    }
+
+    // Session not found - it may have been taken over or expired
+    return {success: false, message: 'Session lost - bot may be in use by another user'};
+
+  } catch (e) {
+    Logger.log('ERROR in renewBotSession: ' + e);
+    return {success: false, message: 'Exception: ' + e.message};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
  * Sync refund reservation to Convex
  */
 function syncRefundReservationToConvex(botId, sqNumber, startRow, rowCount) {
@@ -1472,49 +1762,5 @@ function syncRefundReservationToConvex(botId, sqNumber, startRow, rowCount) {
   } catch (e) {
     Logger.log('⚠️ Error syncing refund reservation to Convex: ' + e);
     return false; // Don't fail the main operation if Convex sync fails
-  }
-}
-
-/**
- * Clear Helper Doc sheet (remove all data rows, keep headers)
- */
-function clearHelperDoc(botId) {
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return {success: false, message: 'Failed to acquire lock'};
-  }
-
-  try {
-    const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
-    
-    if (!helperDocId) {
-      return {success: false, message: 'Helper Doc not configured for ' + botId};
-    }
-
-    const helperDoc = SpreadsheetApp.openById(helperDocId);
-    const helperSheet = helperDoc.getSheetByName(QUEUE_CONFIG.HELPER_SHEET_NAME);
-
-    if (!helperSheet) {
-      return {success: false, message: 'Helper sheet "' + QUEUE_CONFIG.HELPER_SHEET_NAME + '" not found'};
-    }
-
-    const lastRow = helperSheet.getLastRow();
-
-    if (lastRow > 2) {
-      // Clear rows 3 onwards (keep header rows 1-2)
-      helperSheet.getRange(3, 1, lastRow - 2, helperSheet.getLastColumn()).clearContent();
-      SpreadsheetApp.flush();
-      Logger.log('[' + botId + '] Cleared Helper Doc (rows 3-' + lastRow + ')');
-      return {success: true, message: 'Helper Doc cleared', rowsCleared: lastRow - 2};
-    } else {
-      Logger.log('[' + botId + '] Helper Doc already empty');
-      return {success: true, message: 'Helper Doc already empty', rowsCleared: 0};
-    }
-
-  } catch (e) {
-    Logger.log('ERROR in clearHelperDoc: ' + e);
-    return {success: false, message: 'Exception: ' + e.message};
-  } finally {
-    lock.releaseLock();
   }
 }
