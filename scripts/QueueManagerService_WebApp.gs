@@ -28,7 +28,9 @@ const QUEUE_CONFIG = {
   HELPER_DOCS: {
     'BOT1': '1VcpaoXllWGTB3APt9Gjhi4-D_1XUH4qldWiZYQlYoH0',
     'BOT2': '1dsEzEIm2GXtAPbqBYtwFYDFnE0PbgaaoAUAOXghIyeI',
-    'BOT3': '1RZm3lPGjRxiPqnLSpL0PFOhFGWcCL6zjQ1V8UjUUB4I'
+    'BOT3': '1RZm3lPGjRxiPqnLSpL0PFOhFGWcCL6zjQ1V8UjUUB4I',
+    'BOT4': 'REPLACE_WITH_BOT4_SHEET_ID',
+    'BOT5': 'REPLACE_WITH_BOT5_SHEET_ID'
   },
   HELPER_SHEET_NAME: 'Paste Here', // The tab name in Helper Docs
 
@@ -164,6 +166,10 @@ function doPost(e) {
 
       case 'renewBotSession':
         result = renewBotSession(botId);
+        break;
+
+      case 'forceReleaseBotSession':
+        result = forceReleaseBotSession(botId);
         break;
 
       default:
@@ -413,98 +419,53 @@ function releaseRefundLogReservation(botId, sqNumber) {
 }
 
 /**
- * Get list of all active claims and sessions (for monitoring/debugging)
+ * Get list of all active sessions from Convex (for UI to grey out busy bots)
  */
 function getActiveClaims() {
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return [];
-  }
-
   try {
-    const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
-    const queueSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_QUEUE_SHEET_NAME);
+    const url = QUEUE_CONFIG.CONVEX_URL + '/bot-manager/get-active-sessions';
 
-    if (!queueSheet) return [];
+    const options = {
+      method: 'get',
+      muteHttpExceptions: true
+    };
 
-    const data = queueSheet.getDataRange().getValues();
-    const claims = [];
-    const now = new Date();
+    const response = UrlFetchApp.fetch(url, options);
+    const result = JSON.parse(response.getContentText());
 
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-      if (row[0]) { // Has bot ID
-        const age = now - new Date(row[3]);
+    if (result.success && result.sessions) {
+      // Transform sessions to match expected format for UI
+      const sessions = result.sessions.map(function(session) {
+        return {
+          botId: session.botId,
+          sqNumber: 'SESSION', // Keep compatibility with old format
+          status: 'SESSION',
+          timestamp: new Date(session.lastActivity),
+          age: session.age
+        };
+      });
 
-        // Skip stale sessions (> 5 minutes old)
-        if (row[2] === 'SESSION' && age > 300000) {
-          continue;
-        }
-
-        claims.push({
-          botId: row[0],
-          sqNumber: row[1],
-          status: row[2],
-          timestamp: row[3]
-        });
-      }
+      Logger.log('getActiveClaims: Returning ' + sessions.length + ' active sessions from Convex');
+      return sessions;
+    } else {
+      Logger.log('getActiveClaims: No active sessions found');
+      return [];
     }
-
-    return claims;
 
   } catch (e) {
     Logger.log('ERROR in getActiveClaims: ' + e);
     return [];
-  } finally {
-    lock.releaseLock();
   }
 }
 
 /**
- * Clean up stale claims (optional maintenance function)
+ * Clean up stale claims and sessions
+ * Note: Sessions are now managed in Convex and auto-expire after 10 minutes
+ * This function is kept for backwards compatibility
  */
 function cleanupStaleClaims() {
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return 0;
-  }
-
-  try {
-    const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
-    const queueSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_QUEUE_SHEET_NAME);
-
-    if (!queueSheet) return 0;
-
-    const data = queueSheet.getDataRange().getValues();
-    const now = new Date();
-    let removed = 0;
-
-    // Iterate backwards to safely delete rows
-    for (let i = data.length - 1; i >= 1; i--) {
-      const row = data[i];
-      const status = row[2];
-      const timestamp = row[3];
-
-      if (status === 'CLAIMING' && timestamp) {
-        const age = now - new Date(timestamp);
-        if (age > QUEUE_CONFIG.STALE_LOCK_TIMEOUT_MS) {
-          Logger.log('Removing stale claim: ' + row[0] + ' / ' + row[1] + ' (age: ' + Math.floor(age/1000) + 's)');
-          queueSheet.deleteRow(i + 1);
-          removed++;
-        }
-      }
-    }
-
-    SpreadsheetApp.flush();
-    Logger.log('Cleanup complete: removed ' + removed + ' stale claims');
-    return removed;
-
-  } catch (e) {
-    Logger.log('ERROR in cleanupStaleClaims: ' + e);
-    return 0;
-  } finally {
-    lock.releaseLock();
-  }
+  Logger.log('cleanupStaleClaims: Session cleanup now handled automatically by Convex');
+  return {success: true, removed: 0};
 }
 
 /**
@@ -618,6 +579,9 @@ function releaseSQ(botId, sqNumber) {
  * Returns SQ data and marks it as claimed by the bot
  */
 function pullNextSQ(botId) {
+  // Reset session timestamp to keep session alive
+  touchBotSession(botId);
+
   const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
   if (!lock) {
     return {success: false, message: 'Failed to acquire lock', sqData: null};
@@ -642,11 +606,11 @@ function pullNextSQ(botId) {
     const COL_SET_NAME = 7;       // Column H
     const COL_CONDITION = 8;      // Column I
     const COL_QTY = 9;            // Column J
-    const COL_LOCATION_ID = 10;   // Column K (LocationID - skip if "NONE")
+    const COL_LOCATION_ID = 10;   // Column K (LocationID - skip if "The Vault")
     const COL_INITIALS = 14;      // Column O (Inv. Initials - for claiming)
     const COL_RESOLUTION_TYPE = 15; // Column P (Resolution Type - "Missing Note")
     const COL_SOLVE_DATE = 17;    // Column R (Solve Date)
-    const COL_MANUAL_INTERVENTION = 18; // Column S (if has value, skip - needs manual intervention)
+    const COL_MANUAL_INTERVENTION = 18; // Column S (IN THE VAULT - skip if has value)
 
     // Note: Order Number and Buyer Name come from Helper Doc, not Discrep Log
 
@@ -670,11 +634,11 @@ function pullNextSQ(botId) {
       // Skip if already has solve date (already solved)
       if (solveDate) continue;
 
-      // Skip if has manual intervention flag (in vault)
+      // Skip if has manual intervention flag (column S = "IN THE VAULT")
       if (manualIntervention) continue;
 
-      // Skip if location ID is "NONE"
-      if (locationId && locationId.toString().toUpperCase() === 'NONE') continue;
+      // Skip if location ID is "The Vault" (column K)
+      if (locationId && locationId.toString().toLowerCase().includes('vault')) continue;
 
       // This row is unclaimed
       unclaimedItems.push({
@@ -882,6 +846,9 @@ function pullNextSQ(botId) {
  * Much simpler and more reliable than passing data through UI
  */
 function uploadToRefundLog(botId, sqNumber) {
+  // Reset session timestamp to keep session alive
+  touchBotSession(botId);
+
   const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
   if (!lock) {
     return {success: false, message: 'Failed to acquire lock', rows: null};
@@ -999,6 +966,9 @@ function uploadToRefundLog(botId, sqNumber) {
  * Updates the Helper Doc sheet with manually entered order/buyer info
  */
 function syncManualDataToHelper(botId, sqNumber, manualData) {
+  // Reset session timestamp to keep session alive
+  touchBotSession(botId);
+
   const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
   if (!lock) {
     return {success: false, message: 'Failed to acquire lock'};
@@ -1057,6 +1027,9 @@ function syncManualDataToHelper(botId, sqNumber, manualData) {
  * Updates Helper Doc with complete array of items (each row may have different order/buyer)
  */
 function syncAllItemsToHelper(botId, items) {
+  // Reset session timestamp to keep session alive
+  touchBotSession(botId);
+
   const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
   if (!lock) {
     return {success: false, message: 'Failed to acquire lock'};
@@ -1107,6 +1080,9 @@ function syncAllItemsToHelper(botId, items) {
  * Process PDF upload to extract Order Number and Buyer Name
  */
 function processPDFUpload(botId, sqNumber, base64Data, fileName) {
+  // Reset session timestamp to keep session alive
+  touchBotSession(botId);
+
   const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
   if (!lock) {
     return {success: false, message: 'Failed to acquire lock'};
@@ -1137,13 +1113,14 @@ function processPDFUpload(botId, sqNumber, base64Data, fileName) {
       return result;
     }
 
-    // Return success with updated order/buyer info
+    // Return success with updated order/buyer info AND complete array of items
     return {
       success: true,
       message: 'PDF processed successfully! ' + result.matchCount + ' items matched.',
       orderNumber: result.orderNumber,
       buyerName: result.buyerName,
-      matchCount: result.matchCount
+      matchCount: result.matchCount,
+      updatedItems: result.updatedItems || []  // Return complete array with per-row data
     };
 
   } catch (e) {
@@ -1580,129 +1557,20 @@ function syncCompletionToConvex(botId, sqNumber) {
 }
 
 /**
- * Acquire exclusive session lock for a bot
- * Prevents multiple users from using the same bot simultaneously
+ * Reset session timestamp to keep session alive during active use
+ * Call this from any bot action (pull, parse, upload)
  */
-function acquireBotSession(botId) {
+function touchBotSession(botId) {
   const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
   if (!lock) {
-    return {success: false, message: 'Failed to acquire lock'};
+    return;
   }
 
   try {
     const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
     const queueSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_QUEUE_SHEET_NAME);
 
-    if (!queueSheet) {
-      return {success: false, message: 'BOTS sheet not found'};
-    }
-
-    const timestamp = new Date();
-    const data = queueSheet.getDataRange().getValues();
-
-    // Check if bot already has an active session
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-      const queueBotId = row[0];
-      const queueSQ = row[1];
-      const queueStatus = row[2];
-      const queueTimestamp = row[3];
-
-      if (queueBotId === botId && queueStatus === 'SESSION') {
-        const age = timestamp - new Date(queueTimestamp);
-
-        // If session is recent (< 5 minutes), reject new session
-        if (age < 300000) { // 5 minutes
-          return {
-            success: false,
-            message: 'Bot is already in use by another user'
-          };
-        }
-
-        // Session is stale, delete it
-        queueSheet.deleteRow(i + 1);
-        break;
-      }
-    }
-
-    // Create new session lock
-    const nextRow = queueSheet.getLastRow() + 1;
-    queueSheet.getRange(nextRow, 1, 1, 4).setValues([[
-      botId,
-      'SESSION', // SQ column used for session marker
-      'SESSION', // Status
-      timestamp
-    ]]);
-
-    SpreadsheetApp.flush();
-
-    Logger.log('[' + botId + '] Session lock acquired');
-    return {success: true, message: 'Session acquired'};
-
-  } catch (e) {
-    Logger.log('ERROR in acquireBotSession: ' + e);
-    return {success: false, message: 'Exception: ' + e.message};
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-/**
- * Release bot session lock
- */
-function releaseBotSession(botId) {
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return {success: false, message: 'Failed to acquire lock'};
-  }
-
-  try {
-    const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
-    const queueSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_QUEUE_SHEET_NAME);
-
-    if (!queueSheet) {
-      return {success: false, message: 'BOTS sheet not found'};
-    }
-
-    const data = queueSheet.getDataRange().getValues();
-
-    // Find and delete session lock
-    for (let i = data.length - 1; i >= 1; i--) {
-      const row = data[i];
-      if (row[0] === botId && row[2] === 'SESSION') {
-        queueSheet.deleteRow(i + 1);
-        SpreadsheetApp.flush();
-        Logger.log('[' + botId + '] Session lock released');
-        return {success: true, message: 'Session released'};
-      }
-    }
-
-    return {success: false, message: 'No session found'};
-
-  } catch (e) {
-    Logger.log('ERROR in releaseBotSession: ' + e);
-    return {success: false, message: 'Exception: ' + e.message};
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-/**
- * Renew bot session lock (heartbeat)
- */
-function renewBotSession(botId) {
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return {success: false, message: 'Failed to acquire lock'};
-  }
-
-  try {
-    const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
-    const queueSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_QUEUE_SHEET_NAME);
-
-    if (!queueSheet) {
-      return {success: false, message: 'BOTS sheet not found'};
-    }
+    if (!queueSheet) return;
 
     const data = queueSheet.getDataRange().getValues();
     const timestamp = new Date();
@@ -1713,19 +1581,118 @@ function renewBotSession(botId) {
       if (row[0] === botId && row[2] === 'SESSION') {
         queueSheet.getRange(i + 1, 4).setValue(timestamp);
         SpreadsheetApp.flush();
-        return {success: true, message: 'Session renewed'};
+        Logger.log('[' + botId + '] Session timestamp refreshed');
+        return;
       }
     }
-
-    // Session not found - it may have been taken over or expired
-    return {success: false, message: 'Session lost - bot may be in use by another user'};
-
   } catch (e) {
-    Logger.log('ERROR in renewBotSession: ' + e);
-    return {success: false, message: 'Exception: ' + e.message};
+    Logger.log('ERROR in touchBotSession: ' + e);
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Acquire exclusive session lock for a bot via Convex
+ * Prevents multiple users from using the same bot simultaneously
+ */
+function acquireBotSession(botId) {
+  try {
+    const url = QUEUE_CONFIG.CONVEX_URL + '/bot-manager/acquire-session';
+    const payload = JSON.stringify({ botId });
+
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: payload,
+      muteHttpExceptions: true
+    };
+
+    const response = UrlFetchApp.fetch(url, options);
+    const result = JSON.parse(response.getContentText());
+
+    if (result.success) {
+      Logger.log('[' + botId + '] Session lock acquired via Convex');
+    } else {
+      Logger.log('[' + botId + '] Could not acquire session: ' + result.message);
+    }
+
+    return result;
+
+  } catch (e) {
+    Logger.log('ERROR in acquireBotSession: ' + e);
+    return {success: false, message: 'Exception: ' + e.message};
+  }
+}
+
+/**
+ * Release bot session lock via Convex
+ */
+function releaseBotSession(botId) {
+  try {
+    const url = QUEUE_CONFIG.CONVEX_URL + '/bot-manager/release-session';
+    const payload = JSON.stringify({ botId });
+
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: payload,
+      muteHttpExceptions: true
+    };
+
+    const response = UrlFetchApp.fetch(url, options);
+    const result = JSON.parse(response.getContentText());
+
+    Logger.log('[' + botId + '] Session lock released via Convex');
+    return result;
+
+  } catch (e) {
+    Logger.log('ERROR in releaseBotSession: ' + e);
+    return {success: false, message: 'Exception: ' + e.message};
+  }
+}
+
+/**
+ * Renew bot session lock (heartbeat) via Convex
+ * Also used as touchSession - updates activity timestamp
+ */
+function renewBotSession(botId) {
+  return touchBotSession(botId);
+}
+
+/**
+ * Touch bot session to reset inactivity timer via Convex
+ * Called on every user action (pullNextSQ, uploadPDF, uploadToRefundLog, etc.)
+ */
+function touchBotSession(botId) {
+  try {
+    const url = QUEUE_CONFIG.CONVEX_URL + '/bot-manager/touch-session';
+    const payload = JSON.stringify({ botId });
+
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: payload,
+      muteHttpExceptions: true
+    };
+
+    const response = UrlFetchApp.fetch(url, options);
+    const result = JSON.parse(response.getContentText());
+
+    return result;
+
+  } catch (e) {
+    Logger.log('ERROR in touchBotSession: ' + e);
+    return {success: false, message: 'Exception: ' + e.message};
+  }
+}
+
+/**
+ * Force release bot session (for cleanup / admin override)
+ * Just calls the regular release function via Convex
+ */
+function forceReleaseBotSession(botId) {
+  return releaseBotSession(botId);
 }
 
 /**

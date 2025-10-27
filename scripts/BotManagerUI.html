@@ -129,6 +129,14 @@
           <i class="bi bi-3-circle"></i> BOT 3
           <span id="bot3Status" class="d-block mt-2 small"></span>
         </button>
+        <button id="bot4Btn" class="btn btn-warning btn-lg bot-btn" onclick="selectBot('BOT4')">
+          <i class="bi bi-4-circle"></i> BOT 4
+          <span id="bot4Status" class="d-block mt-2 small"></span>
+        </button>
+        <button id="bot5Btn" class="btn btn-danger btn-lg bot-btn" onclick="selectBot('BOT5')">
+          <i class="bi bi-5-circle"></i> BOT 5
+          <span id="bot5Status" class="d-block mt-2 small"></span>
+        </button>
       </div>
     </div>
 
@@ -266,11 +274,31 @@
     let botStatusInterval = null;
     let sessionHeartbeatInterval = null;
 
-    // Check bot status on page load and every 5 seconds
+    // Clean up stale sessions and check bot status on page load
     window.addEventListener('load', function() {
-      checkBotStatus();
-      botStatusInterval = setInterval(checkBotStatus, 5000);
+      // First, clean up any stale sessions (> 5 minutes old)
+      cleanupStaleSessions(function() {
+        // Then check bot status
+        checkBotStatus();
+        botStatusInterval = setInterval(checkBotStatus, 5000);
+      });
     });
+
+    function cleanupStaleSessions(callback) {
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result && result.removed > 0) {
+            console.log('Cleaned up ' + result.removed + ' stale session(s)');
+          }
+          if (callback) callback();
+        })
+        .withFailureHandler(function(error) {
+          console.error('Error cleaning up stale sessions:', error);
+          // Continue anyway
+          if (callback) callback();
+        })
+        .cleanupStaleClaims();
+    }
 
     function checkBotStatus() {
       google.script.run
@@ -282,6 +310,10 @@
     }
 
     function updateBotStatus(claims) {
+      console.log('Raw claims received:', claims);
+      console.log('Type:', typeof claims);
+      console.log('Is array?', Array.isArray(claims));
+
       // Add null/undefined check
       if (!claims || !Array.isArray(claims)) {
         console.warn('No claims data received, all bots will show as available');
@@ -289,7 +321,7 @@
       }
 
       // Reset all bots to available
-      ['BOT1', 'BOT2', 'BOT3'].forEach(botId => {
+      ['BOT1', 'BOT2', 'BOT3', 'BOT4', 'BOT5'].forEach(botId => {
         const btnId = 'bot' + botId.slice(-1) + 'Btn';
         const statusId = 'bot' + botId.slice(-1) + 'Status';
         const btn = document.getElementById(btnId);
@@ -333,7 +365,14 @@
           hideLoading();
 
           if (!result.success) {
-            alert(result.message || 'Failed to acquire bot session');
+            // If bot is already in use, offer to force release
+            if (result.message && result.message.includes('already in use')) {
+              if (confirm(result.message + '\n\nWould you like to force release this bot and take control?')) {
+                forceReleaseAndAcquire(botId);
+              }
+            } else {
+              alert(result.message || 'Failed to acquire bot session');
+            }
             return;
           }
 
@@ -358,6 +397,58 @@
           alert('Error: ' + error.message);
         })
         .acquireBotSession(botId);
+    }
+
+    function forceReleaseAndAcquire(botId) {
+      showLoading('Forcing session release...');
+
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (!result.success) {
+            hideLoading();
+            alert('Failed to force release: ' + (result.message || 'Unknown error'));
+            return;
+          }
+
+          // Session released, now try to acquire again
+          showLoading('Acquiring bot session...');
+
+          google.script.run
+            .withSuccessHandler(function(acquireResult) {
+              hideLoading();
+
+              if (!acquireResult.success) {
+                alert('Failed to acquire session after force release: ' + (acquireResult.message || 'Unknown error'));
+                return;
+              }
+
+              // Stop checking status when inside a bot console
+              if (botStatusInterval) {
+                clearInterval(botStatusInterval);
+                botStatusInterval = null;
+              }
+
+              currentBot = botId;
+              document.getElementById('botSelection').style.display = 'none';
+              document.getElementById('botConsole').style.display = 'block';
+              document.getElementById('currentBotName').textContent = botId;
+
+              // Start session heartbeat (renew every 2 minutes)
+              sessionHeartbeatInterval = setInterval(function() {
+                renewSessionLock(botId);
+              }, 120000);
+            })
+            .withFailureHandler(function(error) {
+              hideLoading();
+              alert('Error acquiring session: ' + error.message);
+            })
+            .acquireBotSession(botId);
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          alert('Error forcing release: ' + error.message);
+        })
+        .forceReleaseBotSession(botId);
     }
 
     function backToSelection() {
@@ -700,10 +791,28 @@
         document.getElementById('buyerName').textContent = firstItem.buyerName || 'Multiple buyers';
 
         console.log('Updated currentSQ after PDF:', currentSQ);
+        console.log('Result from server:', result);
+
+        // Log each item's order/buyer status
+        currentSQ.forEach((item, idx) => {
+          console.log(`Row ${idx + 1}: Card="${item.cardName}", Order="${item.orderNumber}", Buyer="${item.buyerName}"`);
+        });
       }
 
-      // Remove orderNumber and buyerName from missingFields
-      missingFields = missingFields.filter(f => f !== 'orderNumber' && f !== 'buyerName');
+      // Check if ANY row is still missing order/buyer data after PDF processing
+      let hasAnyMissingOrder = false;
+      let hasAnyMissingBuyer = false;
+
+      const items = Array.isArray(currentSQ) ? currentSQ : [currentSQ];
+      items.forEach(item => {
+        if (!item.orderNumber) hasAnyMissingOrder = true;
+        if (!item.buyerName) hasAnyMissingBuyer = true;
+      });
+
+      // Update missingFields based on actual data
+      missingFields = [];
+      if (hasAnyMissingOrder) missingFields.push('orderNumber');
+      if (hasAnyMissingBuyer) missingFields.push('buyerName');
 
       // Check if we still have missing fields
       if (missingFields.length === 0) {

@@ -36,11 +36,11 @@ const CONFIG = {
     SET_NAME: 7,       // Column H (Set)
     CONDITION: 8,      // Column I
     QTY: 9,            // Column J
-    LOCATION_ID: 10,   // Column K (LocationID - skip if "NONE")
+    LOCATION_ID: 10,   // Column K (LocationID - skip if contains "vault")
     INITIALS: 14,      // Column O (Inv. Initials - for claiming)
     RESOLUTION_TYPE: 15, // Column P (Resolution Type - "Missing Note")
     SOLVE_DATE: 17,    // Column R (Solve Date)
-    MANUAL_INTERVENTION: 18 // Column S (if has value, skip - needs manual intervention)
+    MANUAL_INTERVENTION: 18 // Column S ("IN THE VAULT" - skip if has value)
   },
   
   // Helper Doc Columns (this sheet - matches "Paste Here" tab)
@@ -395,15 +395,15 @@ function pullUnclaimedItems() {
         debugCount++;
       }
 
-      // Filter logic: no initials, no solve date, not in vault, not "NONE" location
+      // Filter logic: no initials, no solve date, not in vault
       if (initials) {
         skipCounts.hasInitials++;
       } else if (solveDate) {
         skipCounts.hasSolveDate++;
       } else if (manualIntervention) {
         skipCounts.hasManual++;
-      } else if (locationId && locationId.toString().toUpperCase() === 'NONE') {
-        skipCounts.hasNoneLocation++;
+      } else if (locationId && locationId.toString().toLowerCase().includes('vault')) {
+        skipCounts.hasNoneLocation++; // Reusing counter for vault items
       } else {
         // All criteria met!
         Logger.log(`✓ Found unclaimed item at row ${i}: ${sqNumber}`);
@@ -426,7 +426,7 @@ function pullUnclaimedItems() {
     Logger.log(`  - Has initials (claimed): ${skipCounts.hasInitials}`);
     Logger.log(`  - Has solve date (already solved): ${skipCounts.hasSolveDate}`);
     Logger.log(`  - Has manual intervention flag (in vault): ${skipCounts.hasManual}`);
-    Logger.log(`  - Location is "NONE": ${skipCounts.hasNoneLocation}`);
+    Logger.log(`  - Location is "The Vault": ${skipCounts.hasNoneLocation}`);
 
     if (unclaimedItems.length === 0) {
       Logger.log('\nNo items matched ALL criteria. Check skip breakdown above.');
@@ -435,8 +435,8 @@ function pullUnclaimedItems() {
         `No unclaimed items found.\n\nSkipped:\n` +
         `- Has initials: ${skipCounts.hasInitials}\n` +
         `- Has solve date: ${skipCounts.hasSolveDate}\n` +
-        `- In vault: ${skipCounts.hasManual}\n` +
-        `- Location "NONE": ${skipCounts.hasNoneLocation}\n\n` +
+        `- In vault (Column S): ${skipCounts.hasManual}\n` +
+        `- Location is "The Vault": ${skipCounts.hasNoneLocation}\n\n` +
         `Check Extensions > Apps Script > Executions for details.`,
         ui.ButtonSet.OK
       );
@@ -472,8 +472,8 @@ function pullUnclaimedItems() {
         const solveDate = row[CONFIG.DISCREP_COLS.SOLVE_DATE];
         const manualIntervention = row[CONFIG.DISCREP_COLS.MANUAL_INTERVENTION];
 
-        // Skip rows with NONE location (they don't count)
-        if (locationId && locationId.toString().toUpperCase() === 'NONE') continue;
+        // Skip rows in vault (column K or column S)
+        if (locationId && locationId.toString().toLowerCase().includes('vault')) continue;
 
         // Skip rows already filtered (solve date or manual intervention)
         if (solveDate || manualIntervention) continue;

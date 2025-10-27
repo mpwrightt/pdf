@@ -258,6 +258,127 @@ http.route({
   }),
 });
 
+// Bot Session Management Endpoints
+http.route({
+  path: "/bot-manager/acquire-session",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const body = await request.json();
+      const { botId } = body;
+
+      if (!botId) {
+        return new Response(
+          JSON.stringify({ success: false, message: "Missing botId" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      const result = await ctx.runMutation(internal.sessions.acquireSession, {
+        botId,
+      });
+
+      return new Response(
+        JSON.stringify(result),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    } catch (error: any) {
+      console.error("Error acquiring session:", error);
+      return new Response(
+        JSON.stringify({ success: false, message: error.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }),
+});
+
+http.route({
+  path: "/bot-manager/touch-session",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const body = await request.json();
+      const { botId } = body;
+
+      if (!botId) {
+        return new Response(
+          JSON.stringify({ success: false, message: "Missing botId" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      const result = await ctx.runMutation(internal.sessions.touchSession, {
+        botId,
+      });
+
+      return new Response(
+        JSON.stringify(result),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    } catch (error: any) {
+      console.error("Error touching session:", error);
+      return new Response(
+        JSON.stringify({ success: false, message: error.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }),
+});
+
+http.route({
+  path: "/bot-manager/release-session",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const body = await request.json();
+      const { botId } = body;
+
+      if (!botId) {
+        return new Response(
+          JSON.stringify({ success: false, message: "Missing botId" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      const result = await ctx.runMutation(internal.sessions.releaseSession, {
+        botId,
+      });
+
+      return new Response(
+        JSON.stringify(result),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    } catch (error: any) {
+      console.error("Error releasing session:", error);
+      return new Response(
+        JSON.stringify({ success: false, message: error.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }),
+});
+
+http.route({
+  path: "/bot-manager/get-active-sessions",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const sessions = await ctx.runQuery(internal.sessions.getActiveSessions, {});
+
+      return new Response(
+        JSON.stringify({ success: true, sessions }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    } catch (error: any) {
+      console.error("Error getting active sessions:", error);
+      return new Response(
+        JSON.stringify({ success: false, message: error.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }),
+});
+
 async function validateRequest(req: Request): Promise<WebhookEvent | null> {
   const payloadString = await req.text();
   const svixHeaders = {

@@ -40,4 +40,13 @@ export default defineSchema({
       .index("by_sq_number", ["sqNumber"])
       .index("by_status", ["status"])
       .index("by_reserved_at", ["reservedAt"]),
+
+    // Bot session tracking (activity-based 10-minute timeout)
+    bot_sessions: defineTable({
+      botId: v.string(),
+      lastActivity: v.number(), // Timestamp - updated on every user action
+      acquiredAt: v.number(),   // When session was first acquired
+    })
+      .index("by_bot_id", ["botId"])
+      .index("by_last_activity", ["lastActivity"]),
   });
