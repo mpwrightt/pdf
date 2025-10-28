@@ -43,6 +43,32 @@ export const cleanupStaleClaims = internalMutation({
 });
 
 /**
+ * EMERGENCY: Clean up ALL claims and reservations (use when system is stuck)
+ */
+export const forceCleanupAll = mutation({
+  args: {},
+  handler: async (ctx) => {
+    // Delete ALL SQ claims
+    const allSqClaims = await ctx.db.query("sq_claims").collect();
+    for (const claim of allSqClaims) {
+      await ctx.db.delete(claim._id);
+    }
+
+    // Delete ALL refund reservations
+    const allRefunds = await ctx.db.query("refund_reservations").collect();
+    for (const reservation of allRefunds) {
+      await ctx.db.delete(reservation._id);
+    }
+
+    return {
+      deletedSqClaims: allSqClaims.length,
+      deletedRefundReservations: allRefunds.length,
+      message: "All claims and reservations cleared",
+    };
+  },
+});
+
+/**
  * Internal mutation wrapper for tryClaimSQ (for HTTP actions)
  */
 export const tryClaimSQInternal = internalMutation({
@@ -335,6 +361,24 @@ export const releaseRefundLogWrite = mutation({
       success: true,
       message: `Released Refund Log reservation for SQ ${args.sqNumber}`,
     };
+  },
+});
+
+/**
+ * Get list of currently claimed SQ numbers (for preventing duplicate attempts)
+ * Returns array of SQ numbers that are currently CLAIMING (not yet COMPLETED)
+ */
+export const getClaimedSQs = query({
+  args: {},
+  handler: async (ctx) => {
+    // Get all active (CLAIMING status) SQ claims
+    const activeClaims = await ctx.db
+      .query("sq_claims")
+      .withIndex("by_status", (q) => q.eq("status", "CLAIMING"))
+      .collect();
+
+    // Return just the SQ numbers
+    return activeClaims.map(claim => claim.sqNumber);
   },
 });
 

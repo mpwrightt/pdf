@@ -4,7 +4,7 @@
   <base target="_top">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bot Manager</title>
+  <title>Bot Manager - Batch Mode</title>
 
   <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -45,26 +45,6 @@
       background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
     }
 
-    .bot-btn {
-      padding: 30px;
-      font-size: 1.5rem;
-      font-weight: 600;
-      margin: 10px;
-      border-radius: 15px;
-      transition: all 0.3s;
-    }
-
-    .bot-btn:hover {
-      transform: translateY(-5px);
-      box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-    }
-
-    .status-badge {
-      padding: 10px 20px;
-      border-radius: 20px;
-      font-size: 0.9rem;
-    }
-
     #loading {
       display: none;
     }
@@ -93,14 +73,22 @@
       color: #212529;
       margin-top: 5px;
     }
+
+    .progress-badge {
+      font-size: 1.2rem;
+      padding: 10px 20px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <!-- Header -->
     <div class="text-center mb-4">
-      <h1 class="text-white mb-2"><i class="bi bi-robot"></i> Bot Manager</h1>
-      <p class="text-white-50">Discrepancy Refund Processing System</p>
+      <h1 class="text-white mb-2"><i class="bi bi-robot"></i> Batch Bot Manager</h1>
+      <p class="text-white-50">Process 20 SQs at a time - Discrepancy Refund System</p>
     </div>
 
     <!-- Loading Indicator -->
@@ -111,85 +99,38 @@
       <p class="text-white mt-2" id="loadingText">Processing...</p>
     </div>
 
-    <!-- Bot Selection -->
-    <div id="botSelection" class="card">
+    <!-- Step 1: Claim Batch -->
+    <div id="claimBatchCard" class="card">
       <div class="card-header">
-        <h4 class="mb-0"><i class="bi bi-grid-3x3"></i> Select Bot</h4>
+        <h4 class="mb-0"><i class="bi bi-download"></i> Step 1: Claim Next Batch</h4>
       </div>
-      <div class="card-body text-center">
-        <button id="bot1Btn" class="btn btn-primary btn-lg bot-btn" onclick="selectBot('BOT1')">
-          <i class="bi bi-1-circle"></i> BOT 1
-          <span id="bot1Status" class="d-block mt-2 small"></span>
-        </button>
-        <button id="bot2Btn" class="btn btn-success btn-lg bot-btn" onclick="selectBot('BOT2')">
-          <i class="bi bi-2-circle"></i> BOT 2
-          <span id="bot2Status" class="d-block mt-2 small"></span>
-        </button>
-        <button id="bot3Btn" class="btn btn-info btn-lg bot-btn" onclick="selectBot('BOT3')">
-          <i class="bi bi-3-circle"></i> BOT 3
-          <span id="bot3Status" class="d-block mt-2 small"></span>
-        </button>
-        <button id="bot4Btn" class="btn btn-warning btn-lg bot-btn" onclick="selectBot('BOT4')">
-          <i class="bi bi-4-circle"></i> BOT 4
-          <span id="bot4Status" class="d-block mt-2 small"></span>
-        </button>
-        <button id="bot5Btn" class="btn btn-danger btn-lg bot-btn" onclick="selectBot('BOT5')">
-          <i class="bi bi-5-circle"></i> BOT 5
-          <span id="bot5Status" class="d-block mt-2 small"></span>
+      <div class="card-body">
+        <p class="text-muted">Claim the next 20 unclaimed SQs from the Discrepancy Log and load them into the Helper Doc</p>
+        <button id="claimBtn" class="btn btn-primary btn-lg w-100" onclick="claimBatch()">
+          <i class="bi bi-cloud-download"></i> Claim Next 20 SQs
         </button>
       </div>
     </div>
 
-    <!-- Bot Console (hidden initially) -->
-    <div id="botConsole" style="display: none;">
-      <!-- Header with Back Button -->
-      <div class="card">
-        <div class="card-body d-flex justify-content-between align-items-center">
-          <h3 class="mb-0"><i class="bi bi-robot"></i> <span id="currentBotName"></span> Console</h3>
-          <button class="btn btn-secondary" onclick="backToSelection()">
-            <i class="bi bi-arrow-left"></i> Back
-          </button>
-        </div>
+    <!-- Step 2: Process Each SQ -->
+    <div id="processSQCard" class="card" style="display: none;">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h4 class="mb-0"><i class="bi bi-file-text"></i> Step 2: Process Each SQ</h4>
+        <span id="progressBadge" class="progress-badge">SQ 1 of 20</span>
       </div>
+      <div class="card-body">
+        <!-- Current SQ Info -->
+        <div class="alert alert-info mb-3">
+          <strong>Current SQ:</strong> <span id="currentSQNumber">-</span>
+          <span class="float-end">
+            <strong>Total Rows:</strong> <span id="currentSQRowCount">-</span>
+          </span>
+        </div>
 
-      <!-- Step 1: Pull & Claim SQ -->
-      <div class="card">
-        <div class="card-header">
-          <h5 class="mb-0"><i class="bi bi-download"></i> Step 1: Pull & Claim SQ</h5>
-        </div>
-        <div class="card-body">
-          <p class="text-muted">Fetch the next unclaimed SQ from the Discrep Sheet</p>
-          <button id="pullBtn" class="btn btn-primary btn-lg w-100" onclick="pullAndClaimSQ()">
-            <i class="bi bi-cloud-download"></i> Pull & Claim Next SQ
-          </button>
-        </div>
-      </div>
-
-      <!-- SQ Data Display -->
-      <div id="sqDataCard" class="card" style="display: none;">
-        <div class="card-header">
-          <h5 class="mb-0"><i class="bi bi-file-text"></i> Current SQ Data</h5>
-        </div>
-        <div class="card-body">
+        <!-- SQ Data Display -->
+        <div id="sqDataDisplay" class="mb-3">
+          <h6 class="fw-bold mb-2">Card Data (First Row Preview):</h6>
           <div class="row">
-            <div class="col-md-6">
-              <div class="data-item">
-                <div class="data-label">SQ Number</div>
-                <div class="data-value" id="sqNumber">-</div>
-              </div>
-            </div>
-            <div class="col-md-6">
-              <div class="data-item">
-                <div class="data-label">Order Number</div>
-                <div class="data-value" id="orderNumber">-</div>
-              </div>
-            </div>
-            <div class="col-md-6">
-              <div class="data-item">
-                <div class="data-label">Buyer Name</div>
-                <div class="data-value" id="buyerName">-</div>
-              </div>
-            </div>
             <div class="col-md-6">
               <div class="data-item">
                 <div class="data-label">Game</div>
@@ -210,279 +151,117 @@
             </div>
             <div class="col-md-6">
               <div class="data-item">
-                <div class="data-label">Quantity</div>
-                <div class="data-value" id="qty">-</div>
+                <div class="data-label">Condition</div>
+                <div class="data-value" id="condition">-</div>
               </div>
             </div>
           </div>
-          <button id="openSqBtn" class="btn btn-outline-primary mt-3" onclick="openSqLink()" style="display: none;">
-            <i class="bi bi-box-arrow-up-right"></i> Open SQ Link
-          </button>
         </div>
-      </div>
 
-      <!-- Step 2: PDF Upload -->
-      <div id="pdfUploadCard" class="card" style="display: none;">
-        <div class="card-header bg-info text-white">
-          <h5 class="mb-0"><i class="bi bi-file-pdf"></i> Step 2: Upload SQ Details PDF</h5>
-        </div>
-        <div class="card-body">
-          <p class="text-muted">Upload the PDF to auto-fill Order Number and Buyer Name</p>
-          <div class="upload-area" style="border: 2px dashed #ccc; padding: 40px; text-align: center; margin: 20px 0; cursor: pointer;" onclick="document.getElementById('fileInput').click()">
-            <i class="bi bi-cloud-upload" style="font-size: 3rem; color: #6c757d;"></i>
-            <p class="mt-3">Click to select PDF file</p>
-            <input type="file" id="fileInput" accept=".pdf" style="display:none" onchange="uploadPDF()">
+        <!-- Action Buttons -->
+        <button id="openSqBtn" class="btn btn-outline-primary btn-lg w-100 mb-2" onclick="openCurrentSqLink()">
+          <i class="bi bi-box-arrow-up-right"></i> Open SQ Link
+        </button>
+
+        <!-- PDF Upload -->
+        <div class="card mb-3">
+          <div class="card-header bg-info text-white">
+            <h6 class="mb-0"><i class="bi bi-file-pdf"></i> Upload PDF (Optional)</h6>
           </div>
-          <div id="uploadStatus" style="display: none; padding: 10px; margin-top: 10px;"></div>
+          <div class="card-body">
+            <div class="upload-area" style="border: 2px dashed #ccc; padding: 20px; text-align: center; cursor: pointer;" onclick="document.getElementById('fileInput').click()">
+              <i class="bi bi-cloud-upload" style="font-size: 2rem; color: #6c757d;"></i>
+              <p class="mt-2 mb-0">Click to upload PDF for current SQ</p>
+              <input type="file" id="fileInput" accept=".pdf" style="display:none" onchange="uploadPDF()">
+            </div>
+            <div id="uploadStatus" style="display: none; padding: 10px; margin-top: 10px;"></div>
+          </div>
+        </div>
+
+        <!-- Manual Data Entry (if needed) -->
+        <div id="manualDataCard" class="card mb-3" style="display: none;">
+          <div class="card-header bg-warning text-dark">
+            <h6 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Fill Missing Information</h6>
+          </div>
+          <div class="card-body">
+            <p class="text-muted">Some rows for this SQ are missing Order Number or Buyer Name. Please fill them in:</p>
+            <div id="manualFields"></div>
+            <button class="btn btn-warning w-100 mt-3" onclick="syncManualData()">
+              <i class="bi bi-arrow-repeat"></i> Save Manual Data
+            </button>
+          </div>
+        </div>
+
+        <!-- Next SQ Button -->
+        <div class="d-grid gap-2">
+          <button id="nextSqBtn" class="btn btn-success btn-lg" onclick="nextSQ()" disabled>
+            <i class="bi bi-arrow-right"></i> Next SQ
+          </button>
+          <small class="text-muted text-center" id="nextSqHint">Complete all required fields to proceed</small>
         </div>
       </div>
+    </div>
 
-      <!-- Step 3: Manual Data Entry (if PDF doesn't work) -->
-      <div id="manualDataCard" class="card" style="display: none;">
-        <div class="card-header bg-warning text-dark">
-          <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Step 3: Fill Missing Information</h5>
-        </div>
-        <div class="card-body">
-          <p class="text-muted">Some fields are missing. Please enter them manually based on the SQ.</p>
-          <div id="manualFields"></div>
-          <button class="btn btn-warning w-100 mt-3" onclick="syncManualData()">
-            <i class="bi bi-arrow-repeat"></i> Sync Manual Data
-          </button>
-        </div>
+    <!-- Step 3: Upload Batch -->
+    <div id="uploadBatchCard" class="card" style="display: none;">
+      <div class="card-header bg-success text-white">
+        <h4 class="mb-0"><i class="bi bi-cloud-upload"></i> Step 3: Upload All to Refund Log</h4>
       </div>
-
-      <!-- Step 4: Upload to Refund Log -->
-      <div id="uploadCard" class="card" style="display: none;">
-        <div class="card-header bg-success text-white">
-          <h5 class="mb-0"><i class="bi bi-cloud-upload"></i> Step 4: Upload to Refund Log</h5>
+      <div class="card-body">
+        <div class="alert alert-success mb-3">
+          <i class="bi bi-check-circle"></i> <strong>All SQs Processed!</strong>
+          <p class="mb-0">Ready to upload <span id="totalRowsToUpload">0</span> rows from <span id="totalSQsToUpload">0</span> SQs to the Refund Log.</p>
         </div>
-        <div class="card-body">
-          <p class="text-muted">Upload the processed SQ data to the Refund Log sheet</p>
-          <button id="uploadBtn" class="btn btn-success btn-lg w-100" onclick="uploadToRefundLog()">
-            <i class="bi bi-upload"></i> Upload to Refund Log
-          </button>
-        </div>
+        <button id="uploadBtn" class="btn btn-success btn-lg w-100 mb-2" onclick="uploadBatchToRefundLog()">
+          <i class="bi bi-upload"></i> Upload All to Refund Log
+        </button>
+        <button class="btn btn-secondary w-100" onclick="startNewBatch()">
+          <i class="bi bi-arrow-clockwise"></i> Start New Batch
+        </button>
       </div>
     </div>
   </div>
 
   <script>
-    let currentBot = null;
-    let currentSQ = null;
-    let missingFields = [];
-    let manualData = {};
-    let botStatusInterval = null;
-    let sessionHeartbeatInterval = null;
+    // State variables
+    let batchedSQs = []; // Array of {sqNumber, sqLink, rowCount, rows: [...]}
+    let currentSQIndex = 0; // Which SQ we're currently processing (0-19)
+    let totalSQsInBatch = 0;
+    const BOT_ID = 'BATCH_BOT'; // Single bot for batch processing
 
-    // Clean up stale sessions and check bot status on page load
+    // Restore state from sessionStorage on page load (in case of refresh)
     window.addEventListener('load', function() {
-      // First, clean up any stale sessions (> 5 minutes old)
-      cleanupStaleSessions(function() {
-        // Then check bot status
-        checkBotStatus();
-        botStatusInterval = setInterval(checkBotStatus, 5000);
-      });
+      const savedBatch = sessionStorage.getItem('batchedSQs');
+      const savedIndex = sessionStorage.getItem('currentSQIndex');
+
+      if (savedBatch && savedIndex) {
+        batchedSQs = JSON.parse(savedBatch);
+        currentSQIndex = parseInt(savedIndex);
+        totalSQsInBatch = batchedSQs.length;
+
+        // Restore UI state
+        if (currentSQIndex < totalSQsInBatch) {
+          document.getElementById('claimBatchCard').style.display = 'none';
+          document.getElementById('processSQCard').style.display = 'block';
+          displayCurrentSQ();
+        } else {
+          // All SQs processed, show upload card
+          document.getElementById('claimBatchCard').style.display = 'none';
+          document.getElementById('uploadBatchCard').style.display = 'block';
+          updateUploadSummary();
+        }
+      }
     });
 
-    function cleanupStaleSessions(callback) {
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result && result.removed > 0) {
-            console.log('Cleaned up ' + result.removed + ' stale session(s)');
-          }
-          if (callback) callback();
-        })
-        .withFailureHandler(function(error) {
-          console.error('Error cleaning up stale sessions:', error);
-          // Continue anyway
-          if (callback) callback();
-        })
-        .cleanupStaleClaims();
+    // Save state to sessionStorage
+    function saveState() {
+      sessionStorage.setItem('batchedSQs', JSON.stringify(batchedSQs));
+      sessionStorage.setItem('currentSQIndex', currentSQIndex.toString());
     }
 
-    function checkBotStatus() {
-      google.script.run
-        .withSuccessHandler(updateBotStatus)
-        .withFailureHandler(function(error) {
-          console.error('Error checking bot status:', error);
-        })
-        .getActiveClaims();
-    }
-
-    function updateBotStatus(claims) {
-      console.log('Raw claims received:', claims);
-      console.log('Type:', typeof claims);
-      console.log('Is array?', Array.isArray(claims));
-
-      // Add null/undefined check
-      if (!claims || !Array.isArray(claims)) {
-        console.warn('No claims data received, all bots will show as available');
-        claims = [];
-      }
-
-      // Reset all bots to available
-      ['BOT1', 'BOT2', 'BOT3', 'BOT4', 'BOT5'].forEach(botId => {
-        const btnId = 'bot' + botId.slice(-1) + 'Btn';
-        const statusId = 'bot' + botId.slice(-1) + 'Status';
-        const btn = document.getElementById(btnId);
-        const status = document.getElementById(statusId);
-
-        btn.disabled = false;
-        btn.classList.remove('disabled', 'opacity-50');
-        status.textContent = '';
-        status.className = 'd-block mt-2 small';
-      });
-
-      // Mark busy bots (both CLAIMING and SESSION)
-      claims.forEach(claim => {
-        if (claim.status === 'CLAIMING' || claim.status === 'SESSION') {
-          const botNum = claim.botId.slice(-1);
-          const btnId = 'bot' + botNum + 'Btn';
-          const statusId = 'bot' + botNum + 'Status';
-          const btn = document.getElementById(btnId);
-          const status = document.getElementById(statusId);
-
-          btn.disabled = true;
-          btn.classList.add('disabled');
-          btn.style.opacity = '0.5';
-          btn.style.cursor = 'not-allowed';
-
-          if (claim.status === 'SESSION') {
-            status.innerHTML = '<i class="bi bi-lock-fill"></i> In Use';
-          } else {
-            status.innerHTML = '<i class="bi bi-lock-fill"></i> Processing';
-          }
-
-          status.className = 'd-block mt-2 small text-white-50';
-        }
-      });
-    }
-
-    function selectBot(botId) {
-      // Try to acquire session lock
-      showLoading('Acquiring bot session...');
-
-      google.script.run
-        .withSuccessHandler(function(result) {
-          hideLoading();
-
-          if (!result.success) {
-            // If bot is already in use, offer to force release
-            if (result.message && result.message.includes('already in use')) {
-              if (confirm(result.message + '\n\nWould you like to force release this bot and take control?')) {
-                forceReleaseAndAcquire(botId);
-              }
-            } else {
-              alert(result.message || 'Failed to acquire bot session');
-            }
-            return;
-          }
-
-          // Stop checking status when inside a bot console
-          if (botStatusInterval) {
-            clearInterval(botStatusInterval);
-            botStatusInterval = null;
-          }
-
-          currentBot = botId;
-          document.getElementById('botSelection').style.display = 'none';
-          document.getElementById('botConsole').style.display = 'block';
-          document.getElementById('currentBotName').textContent = botId;
-
-          // Start session heartbeat (renew every 2 minutes)
-          sessionHeartbeatInterval = setInterval(function() {
-            renewSessionLock(botId);
-          }, 120000); // 2 minutes
-        })
-        .withFailureHandler(function(error) {
-          hideLoading();
-          alert('Error: ' + error.message);
-        })
-        .acquireBotSession(botId);
-    }
-
-    function forceReleaseAndAcquire(botId) {
-      showLoading('Forcing session release...');
-
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (!result.success) {
-            hideLoading();
-            alert('Failed to force release: ' + (result.message || 'Unknown error'));
-            return;
-          }
-
-          // Session released, now try to acquire again
-          showLoading('Acquiring bot session...');
-
-          google.script.run
-            .withSuccessHandler(function(acquireResult) {
-              hideLoading();
-
-              if (!acquireResult.success) {
-                alert('Failed to acquire session after force release: ' + (acquireResult.message || 'Unknown error'));
-                return;
-              }
-
-              // Stop checking status when inside a bot console
-              if (botStatusInterval) {
-                clearInterval(botStatusInterval);
-                botStatusInterval = null;
-              }
-
-              currentBot = botId;
-              document.getElementById('botSelection').style.display = 'none';
-              document.getElementById('botConsole').style.display = 'block';
-              document.getElementById('currentBotName').textContent = botId;
-
-              // Start session heartbeat (renew every 2 minutes)
-              sessionHeartbeatInterval = setInterval(function() {
-                renewSessionLock(botId);
-              }, 120000);
-            })
-            .withFailureHandler(function(error) {
-              hideLoading();
-              alert('Error acquiring session: ' + error.message);
-            })
-            .acquireBotSession(botId);
-        })
-        .withFailureHandler(function(error) {
-          hideLoading();
-          alert('Error forcing release: ' + error.message);
-        })
-        .forceReleaseBotSession(botId);
-    }
-
-    function backToSelection() {
-      // Stop session heartbeat
-      if (sessionHeartbeatInterval) {
-        clearInterval(sessionHeartbeatInterval);
-        sessionHeartbeatInterval = null;
-      }
-
-      // Release session lock
-      if (currentBot) {
-        google.script.run.releaseBotSession(currentBot);
-      }
-
-      document.getElementById('botSelection').style.display = 'block';
-      document.getElementById('botConsole').style.display = 'none';
-      resetBotConsole();
-
-      // Restart status checking
-      checkBotStatus();
-      botStatusInterval = setInterval(checkBotStatus, 5000);
-    }
-
-    function resetBotConsole() {
-      currentBot = null;
-      currentSQ = null;
-      missingFields = [];
-      manualData = {};
-      document.getElementById('sqDataCard').style.display = 'none';
-      document.getElementById('manualDataCard').style.display = 'none';
-      document.getElementById('uploadCard').style.display = 'none';
-      document.getElementById('pullBtn').disabled = false;
+    function clearState() {
+      sessionStorage.removeItem('batchedSQs');
+      sessionStorage.removeItem('currentSQIndex');
     }
 
     function showLoading(text) {
@@ -494,125 +273,227 @@
       document.getElementById('loading').style.display = 'none';
     }
 
-    function pullAndClaimSQ() {
-      showLoading('Pulling next SQ...');
-      document.getElementById('pullBtn').disabled = true;
+    function claimBatch() {
+      showLoading('Claiming next 20 SQs... This may take a minute.');
+      document.getElementById('claimBtn').disabled = true;
+
+      // Set 3-minute timeout for batch claim
+      const claimTimeout = setTimeout(function() {
+        hideLoading();
+        document.getElementById('claimBtn').disabled = false;
+        alert('Batch claim timed out after 3 minutes. The server may be slow. Please try again.');
+      }, 180000);
 
       google.script.run
-        .withSuccessHandler(handlePullSuccess)
-        .withFailureHandler(handleError)
-        .pullNextSQ(currentBot);
+        .withSuccessHandler(function(result) {
+          clearTimeout(claimTimeout);
+          handleClaimSuccess(result);
+        })
+        .withFailureHandler(function(error) {
+          clearTimeout(claimTimeout);
+          hideLoading();
+          alert('Error: ' + error.message);
+          document.getElementById('claimBtn').disabled = false;
+        })
+        .pullNextBatchOfSQs(BOT_ID, 20);
     }
 
-    function handlePullSuccess(result) {
+    function handleClaimSuccess(result) {
       hideLoading();
 
       if (!result.success) {
-        alert(result.message || 'Failed to pull SQ');
-        document.getElementById('pullBtn').disabled = false;
+        alert(result.message || 'Failed to claim batch');
+        document.getElementById('claimBtn').disabled = false;
         return;
       }
 
-      // sqData is now an array of items - store the whole array
-      currentSQ = result.sqData;
+      // Store batch data
+      batchedSQs = result.sqBatch;
+      currentSQIndex = 0;
+      totalSQsInBatch = batchedSQs.length;
 
-      // Display SQ data from FIRST item (all items share same SQ#, order, buyer)
-      const firstItem = Array.isArray(currentSQ) ? currentSQ[0] : currentSQ;
+      saveState();
 
-      if (!firstItem) {
-        alert('No SQ data returned');
-        document.getElementById('pullBtn').disabled = false;
+      console.log('Claimed batch:', batchedSQs);
+
+      // Hide claim card, show process card
+      document.getElementById('claimBatchCard').style.display = 'none';
+      document.getElementById('processSQCard').style.display = 'block';
+
+      // Display first SQ
+      displayCurrentSQ();
+
+      alert(`Successfully claimed ${totalSQsInBatch} SQs! (${result.totalRows} total rows)\n\nNow processing SQ 1 of ${totalSQsInBatch}`);
+    }
+
+    function displayCurrentSQ() {
+      if (currentSQIndex >= totalSQsInBatch) {
+        // All SQs processed, move to upload step
+        document.getElementById('processSQCard').style.display = 'none';
+        document.getElementById('uploadBatchCard').style.display = 'block';
+        updateUploadSummary();
         return;
       }
 
-      document.getElementById('sqNumber').textContent = firstItem.sqNumber;
-      document.getElementById('orderNumber').textContent = firstItem.orderNumber || 'N/A';
-      document.getElementById('buyerName').textContent = firstItem.buyerName || 'N/A';
-      document.getElementById('game').textContent = firstItem.game;
-      document.getElementById('cardName').textContent = firstItem.cardName;
-      document.getElementById('setName').textContent = firstItem.setName;
+      const currentSQ = batchedSQs[currentSQIndex];
 
-      // Show total quantity if array, otherwise single item qty
-      if (Array.isArray(currentSQ)) {
-        const totalQty = currentSQ.reduce((sum, item) => sum + (parseInt(item.qty) || 1), 0);
-        document.getElementById('qty').textContent = `${totalQty} items (${currentSQ.length} rows)`;
+      // Update progress badge
+      document.getElementById('progressBadge').textContent = `SQ ${currentSQIndex + 1} of ${totalSQsInBatch}`;
+
+      // Update SQ info
+      document.getElementById('currentSQNumber').textContent = currentSQ.sqNumber;
+      document.getElementById('currentSQRowCount').textContent = currentSQ.rowCount;
+
+      // Display first row as preview
+      const firstRow = currentSQ.rows[0];
+      document.getElementById('game').textContent = firstRow.game || '-';
+      document.getElementById('cardName').textContent = firstRow.cardName || '-';
+      document.getElementById('setName').textContent = firstRow.setName || '-';
+      document.getElementById('condition').textContent = firstRow.condition || '-';
+
+      // Auto-open SQ link
+      if (currentSQ.sqLink) {
+        window.open(currentSQ.sqLink, '_blank');
+      }
+
+      // Reset upload status
+      document.getElementById('uploadStatus').style.display = 'none';
+      document.getElementById('manualDataCard').style.display = 'none';
+
+      // Check if this SQ has missing fields
+      checkMissingFields();
+    }
+
+    function checkMissingFields() {
+      const currentSQ = batchedSQs[currentSQIndex];
+      let hasMissing = false;
+
+      for (const row of currentSQ.rows) {
+        if (!row.orderNumber || !row.buyerName) {
+          hasMissing = true;
+          break;
+        }
+      }
+
+      if (hasMissing) {
+        // Show manual data form
+        showManualDataForm();
+        document.getElementById('nextSqBtn').disabled = true;
+        document.getElementById('nextSqHint').textContent = 'Complete all required fields to proceed';
       } else {
-        document.getElementById('qty').textContent = currentSQ.qty;
+        // No missing fields, enable next button
+        document.getElementById('nextSqBtn').disabled = false;
+        document.getElementById('nextSqHint').textContent = 'Ready to move to next SQ';
       }
+    }
 
-      document.getElementById('sqDataCard').style.display = 'block';
-
-      // Show SQ link button if available
-      if (firstItem.sqLink) {
-        document.getElementById('openSqBtn').style.display = 'block';
-        // Auto-open SQ link
-        window.open(firstItem.sqLink, '_blank');
-      }
-
-      // Check for missing fields (from response root, not item)
-      if (result.missingFields && result.missingFields.length > 0) {
-        missingFields = result.missingFields;
-        // Show PDF upload card to auto-fill missing fields
-        document.getElementById('pdfUploadCard').style.display = 'block';
+    function openCurrentSqLink() {
+      const currentSQ = batchedSQs[currentSQIndex];
+      if (currentSQ && currentSQ.sqLink) {
+        window.open(currentSQ.sqLink, '_blank');
       } else {
-        // No missing fields, can upload directly
-        document.getElementById('uploadCard').style.display = 'block';
+        alert('No SQ link available');
       }
+    }
+
+    function uploadPDF() {
+      const fileInput = document.getElementById('fileInput');
+      const file = fileInput.files[0];
+      const uploadStatus = document.getElementById('uploadStatus');
+
+      if (!file) return;
+
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        uploadStatus.style.display = 'block';
+        uploadStatus.className = 'alert alert-danger';
+        uploadStatus.textContent = 'Please select a PDF file';
+        return;
+      }
+
+      showLoading('Uploading and processing PDF...');
+
+      uploadStatus.style.display = 'block';
+      uploadStatus.className = 'alert alert-info';
+      uploadStatus.innerHTML = '<div class="spinner-border spinner-border-sm me-2"></div>Processing...';
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const base64Data = e.target.result.split(',')[1];
+        const currentSQ = batchedSQs[currentSQIndex];
+
+        google.script.run
+          .withSuccessHandler(handlePDFUploadSuccess)
+          .withFailureHandler(handlePDFUploadError)
+          .processPDFUpload(BOT_ID, currentSQ.sqNumber, base64Data, file.name);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function handlePDFUploadSuccess(result) {
+      hideLoading();
+      const uploadStatus = document.getElementById('uploadStatus');
+
+      if (!result.success) {
+        uploadStatus.className = 'alert alert-danger';
+        uploadStatus.textContent = 'Error: ' + (result.message || 'Failed to process PDF');
+        return;
+      }
+
+      uploadStatus.className = 'alert alert-success';
+      uploadStatus.innerHTML = '<i class="bi bi-check-circle me-2"></i>' + result.message;
+
+      // Update current SQ's rows with data from PDF
+      if (result.updatedItems && result.updatedItems.length > 0) {
+        batchedSQs[currentSQIndex].rows = result.updatedItems;
+        saveState();
+
+        console.log('Updated current SQ after PDF:', batchedSQs[currentSQIndex]);
+
+        // Check if we still have missing fields
+        checkMissingFields();
+      }
+    }
+
+    function handlePDFUploadError(error) {
+      hideLoading();
+      const uploadStatus = document.getElementById('uploadStatus');
+      uploadStatus.style.display = 'block';
+      uploadStatus.className = 'alert alert-danger';
+      uploadStatus.textContent = 'Error: ' + error.message;
     }
 
     function showManualDataForm() {
       const container = document.getElementById('manualFields');
       container.innerHTML = '';
 
-      // currentSQ is an array of items - show form for each row with missing data
-      const items = Array.isArray(currentSQ) ? currentSQ : [currentSQ];
+      const currentSQ = batchedSQs[currentSQIndex];
 
-      items.forEach((item, idx) => {
-        // Check if this row is missing order or buyer
-        const needsOrder = !item.orderNumber;
-        const needsBuyer = !item.buyerName;
+      currentSQ.rows.forEach((row, idx) => {
+        const needsOrder = !row.orderNumber;
+        const needsBuyer = !row.buyerName;
 
-        if (!needsOrder && !needsBuyer) return; // Skip rows with complete data
+        if (!needsOrder && !needsBuyer) return; // Skip complete rows
 
         const rowDiv = document.createElement('div');
-        rowDiv.className = 'card mb-3';
+        rowDiv.className = 'card mb-2';
         rowDiv.innerHTML = `
           <div class="card-body">
-            <h6 class="card-title fw-bold mb-3">Row ${idx + 1} - Card Details</h6>
-            <div class="row mb-3">
-              <div class="col-md-6">
-                <small class="text-muted">Card:</small>
-                <div class="fw-bold">${item.cardName || 'N/A'}</div>
-              </div>
-              <div class="col-md-3">
-                <small class="text-muted">Qty:</small>
-                <div class="fw-bold">${item.qty || '1'}</div>
-              </div>
-              <div class="col-md-3">
-                <small class="text-muted">Condition:</small>
-                <div class="fw-bold">${item.condition || 'N/A'}</div>
-              </div>
-            </div>
-            <div class="row mb-3">
-              <div class="col-md-8">
-                <small class="text-muted">Set:</small>
-                <div>${item.setName || 'N/A'}</div>
-              </div>
-              <div class="col-md-4">
-                <small class="text-muted">Collector #:</small>
-                <div>${item.collectorNum || 'N/A'}</div>
-              </div>
+            <h6 class="card-title fw-bold mb-2">Row ${idx + 1}: ${row.cardName || 'N/A'}</h6>
+            <div class="row mb-2">
+              <div class="col-6"><small class="text-muted">Set:</small> ${row.setName || 'N/A'}</div>
+              <div class="col-3"><small class="text-muted">Qty:</small> ${row.qty || 1}</div>
+              <div class="col-3"><small class="text-muted">Cond:</small> ${row.condition || 'N/A'}</div>
             </div>
             ${needsOrder ? `
               <div class="mb-2">
                 <label class="form-label fw-bold">Order Number</label>
-                <input type="text" class="form-control" data-row="${idx}" data-field="orderNumber" placeholder="Enter order number for this card">
+                <input type="text" class="form-control" data-row="${idx}" data-field="orderNumber" placeholder="Enter order number">
               </div>
             ` : ''}
             ${needsBuyer ? `
               <div class="mb-2">
                 <label class="form-label fw-bold">Buyer Name</label>
-                <input type="text" class="form-control" data-row="${idx}" data-field="buyerName" placeholder="Enter buyer name for this card">
+                <input type="text" class="form-control" data-row="${idx}" data-field="buyerName" placeholder="Enter buyer name">
               </div>
             ` : ''}
           </div>
@@ -624,7 +505,6 @@
     }
 
     function syncManualData() {
-      // Collect manual data from all input fields
       const inputs = document.querySelectorAll('#manualFields input[data-row]');
       let allFilled = true;
 
@@ -638,13 +518,8 @@
           input.classList.add('is-invalid');
         } else {
           input.classList.remove('is-invalid');
-
-          // Update the corresponding item in currentSQ array
-          if (Array.isArray(currentSQ) && currentSQ[rowIdx]) {
-            currentSQ[rowIdx][field] = value;
-          } else if (!Array.isArray(currentSQ)) {
-            currentSQ[field] = value;
-          }
+          // Update the row data in memory
+          batchedSQs[currentSQIndex].rows[rowIdx][field] = value;
         }
       });
 
@@ -653,14 +528,13 @@
         return;
       }
 
-      showLoading('Updating Helper Doc with manual data...');
+      showLoading('Saving manual data to Helper Doc...');
 
-      // Since data is per-row and may be different for each row, we need to sync ALL items
-      // Call server to update Helper Doc with the complete currentSQ array
+      // Save updated rows to Helper Doc
       google.script.run
         .withSuccessHandler(handleManualSyncSuccess)
         .withFailureHandler(handleError)
-        .syncAllItemsToHelper(currentBot, currentSQ);
+        .syncAllItemsToHelper(BOT_ID, batchedSQs[currentSQIndex].rows);
     }
 
     function handleManualSyncSuccess(result) {
@@ -671,38 +545,55 @@
         return;
       }
 
-      // Update display with first item's data (representative)
-      const firstItem = Array.isArray(currentSQ) ? currentSQ[0] : currentSQ;
-      if (firstItem.orderNumber) {
-        document.getElementById('orderNumber').textContent = firstItem.orderNumber;
-      }
-      if (firstItem.buyerName) {
-        document.getElementById('buyerName').textContent = firstItem.buyerName;
-      }
+      saveState();
 
       // Hide manual data form
       document.getElementById('manualDataCard').style.display = 'none';
-      missingFields = [];
 
-      // Show upload card
-      document.getElementById('uploadCard').style.display = 'block';
+      // Enable next button
+      document.getElementById('nextSqBtn').disabled = false;
+      document.getElementById('nextSqHint').textContent = 'Ready to move to next SQ';
 
-      alert('Manual data synced successfully!');
+      alert('Manual data saved successfully!');
     }
 
-    function uploadToRefundLog() {
-      showLoading('Uploading to Refund Log...');
+    function nextSQ() {
+      // Move to next SQ
+      currentSQIndex++;
+      saveState();
+
+      if (currentSQIndex >= totalSQsInBatch) {
+        // All SQs processed
+        document.getElementById('processSQCard').style.display = 'none';
+        document.getElementById('uploadBatchCard').style.display = 'block';
+        updateUploadSummary();
+      } else {
+        // Display next SQ
+        displayCurrentSQ();
+      }
+    }
+
+    function updateUploadSummary() {
+      let totalRows = 0;
+      for (const sq of batchedSQs) {
+        totalRows += sq.rowCount;
+      }
+
+      document.getElementById('totalRowsToUpload').textContent = totalRows;
+      document.getElementById('totalSQsToUpload').textContent = totalSQsInBatch;
+    }
+
+    function uploadBatchToRefundLog() {
+      showLoading('Uploading all SQs to Refund Log...');
       document.getElementById('uploadBtn').disabled = true;
 
-      // Get sqNumber from currentSQ (array or single object)
-      const sqNumber = Array.isArray(currentSQ) ? currentSQ[0].sqNumber : currentSQ.sqNumber;
+      // Extract SQ numbers
+      const sqNumbers = batchedSQs.map(sq => sq.sqNumber);
 
-      // New simplified approach: just pass botId and sqNumber
-      // Server will read directly from Helper Doc
       google.script.run
         .withSuccessHandler(handleUploadSuccess)
         .withFailureHandler(handleError)
-        .uploadToRefundLog(currentBot, sqNumber);
+        .uploadBatchToRefundLog(BOT_ID, sqNumbers);
     }
 
     function handleUploadSuccess(result) {
@@ -714,126 +605,26 @@
         return;
       }
 
-      alert('Successfully uploaded to Refund Log!');
+      const message = `Successfully uploaded ${result.rows} row(s) from ${result.sqCount} SQ(s) to Refund Log!`;
+      alert(message);
 
-      // Reset for next SQ
-      resetBotConsole();
+      // Clear state and reset for new batch
+      startNewBatch();
     }
 
-    function openSqLink() {
-      if (currentSQ) {
-        const sqLink = Array.isArray(currentSQ) ? currentSQ[0].sqLink : currentSQ.sqLink;
-        if (sqLink) {
-          window.open(sqLink, '_blank');
-        }
-      }
-    }
+    function startNewBatch() {
+      // Clear state
+      batchedSQs = [];
+      currentSQIndex = 0;
+      totalSQsInBatch = 0;
+      clearState();
 
-    function uploadPDF() {
-      const fileInput = document.getElementById('fileInput');
-      const file = fileInput.files[0];
-      const uploadStatus = document.getElementById('uploadStatus');
-
-      if (!file) {
-        return;
-      }
-
-      if (!file.name.toLowerCase().endsWith('.pdf')) {
-        uploadStatus.style.display = 'block';
-        uploadStatus.className = 'alert alert-danger';
-        uploadStatus.textContent = 'Please select a PDF file';
-        return;
-      }
-
-      uploadStatus.style.display = 'block';
-      uploadStatus.className = 'alert alert-info';
-      uploadStatus.innerHTML = '<div class="spinner-border spinner-border-sm me-2"></div>Uploading and processing PDF...';
-
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        const base64Data = e.target.result.split(',')[1];
-
-        // Get sqNumber from first item (currentSQ is now an array)
-        const sqNumber = Array.isArray(currentSQ) ? currentSQ[0].sqNumber : currentSQ.sqNumber;
-
-        google.script.run
-          .withSuccessHandler(handlePDFUploadSuccess)
-          .withFailureHandler(handlePDFUploadError)
-          .processPDFUpload(currentBot, sqNumber, base64Data, file.name);
-      };
-      reader.readAsDataURL(file);
-    }
-
-    function handlePDFUploadSuccess(result) {
-      const uploadStatus = document.getElementById('uploadStatus');
-
-      if (!result.success) {
-        uploadStatus.className = 'alert alert-danger';
-        uploadStatus.textContent = 'Error: ' + (result.message || 'Failed to process PDF');
-        return;
-      }
-
-      uploadStatus.className = 'alert alert-success';
-      uploadStatus.innerHTML = '<i class="bi bi-check-circle me-2"></i>' + result.message;
-
-      // Replace currentSQ with updatedItems from server (has per-row order/buyer data)
-      if (result.updatedItems && result.updatedItems.length > 0) {
-        // Preserve sqLink from original currentSQ array
-        const originalSqLink = (Array.isArray(currentSQ) && currentSQ.length > 0) ? currentSQ[0].sqLink : '';
-
-        // Update currentSQ with new data and add sqLink to each item
-        currentSQ = result.updatedItems.map(item => ({
-          ...item,
-          sqLink: originalSqLink
-        }));
-
-        // Update display with first item's data
-        const firstItem = currentSQ[0];
-        document.getElementById('orderNumber').textContent = firstItem.orderNumber || 'Multiple orders';
-        document.getElementById('buyerName').textContent = firstItem.buyerName || 'Multiple buyers';
-
-        console.log('Updated currentSQ after PDF:', currentSQ);
-        console.log('Result from server:', result);
-
-        // Log each item's order/buyer status
-        currentSQ.forEach((item, idx) => {
-          console.log(`Row ${idx + 1}: Card="${item.cardName}", Order="${item.orderNumber}", Buyer="${item.buyerName}"`);
-        });
-      }
-
-      // Check if ANY row is still missing order/buyer data after PDF processing
-      let hasAnyMissingOrder = false;
-      let hasAnyMissingBuyer = false;
-
-      const items = Array.isArray(currentSQ) ? currentSQ : [currentSQ];
-      items.forEach(item => {
-        if (!item.orderNumber) hasAnyMissingOrder = true;
-        if (!item.buyerName) hasAnyMissingBuyer = true;
-      });
-
-      // Update missingFields based on actual data
-      missingFields = [];
-      if (hasAnyMissingOrder) missingFields.push('orderNumber');
-      if (hasAnyMissingBuyer) missingFields.push('buyerName');
-
-      // Check if we still have missing fields
-      if (missingFields.length === 0) {
-        // All fields complete - hide PDF upload and manual data cards, show upload card
-        document.getElementById('pdfUploadCard').style.display = 'none';
-        document.getElementById('manualDataCard').style.display = 'none';
-        document.getElementById('uploadCard').style.display = 'block';
-      } else {
-        // Still missing some fields - show manual data form
-        showManualDataForm();
-      }
-    }
-
-    function handlePDFUploadError(error) {
-      const uploadStatus = document.getElementById('uploadStatus');
-      uploadStatus.style.display = 'block';
-      uploadStatus.className = 'alert alert-danger';
-      uploadStatus.textContent = 'Error: ' + error.message;
-      console.error('PDF upload error:', error);
+      // Reset UI
+      document.getElementById('claimBatchCard').style.display = 'block';
+      document.getElementById('processSQCard').style.display = 'none';
+      document.getElementById('uploadBatchCard').style.display = 'none';
+      document.getElementById('claimBtn').disabled = false;
+      document.getElementById('uploadBtn').disabled = false;
     }
 
     function handleError(error) {
@@ -842,39 +633,12 @@
       console.error(error);
     }
 
-    function renewSessionLock(botId) {
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (!result.success) {
-            console.warn('Session renewal failed:', result.message);
-            // Session was lost - likely another user took over
-            alert('Your session has expired. Another user may have accessed this bot.');
-            backToSelection();
-          } else {
-            console.log('Session renewed successfully');
-          }
-        })
-        .withFailureHandler(function(error) {
-          console.error('Session renewal error:', error);
-        })
-        .renewBotSession(botId);
-    }
-
-    // Release session on page unload
-    window.addEventListener('beforeunload', function() {
-      if (currentBot && sessionHeartbeatInterval) {
-        // Use navigator.sendBeacon for reliable delivery during page unload
-        const url = window.location.href.split('?')[0];
-        const params = new URLSearchParams({
-          action: 'releaseBotSession',
-          botId: currentBot
-        });
-
-        try {
-          navigator.sendBeacon(url + '?' + params.toString());
-        } catch (e) {
-          console.error('Failed to release session on unload:', e);
-        }
+    // Warn user if they try to leave with batch in progress
+    window.addEventListener('beforeunload', function(e) {
+      if (batchedSQs.length > 0 && currentSQIndex < totalSQsInBatch) {
+        e.preventDefault();
+        e.returnValue = 'You have a batch in progress. Are you sure you want to leave?';
+        return e.returnValue;
       }
     });
   </script>

@@ -153,3 +153,23 @@ export const cleanupStaleSessions = internalMutation({
     };
   },
 });
+
+/**
+ * EMERGENCY: Force release ALL sessions (use when system is stuck)
+ */
+export const forceReleaseAllSessions = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const allSessions = await ctx.db.query("bot_sessions").collect();
+
+    for (const session of allSessions) {
+      await ctx.db.delete(session._id);
+    }
+
+    return {
+      success: true,
+      deletedCount: allSessions.length,
+      message: "All sessions forcefully released",
+    };
+  },
+});

@@ -24,13 +24,18 @@ const QUEUE_CONFIG = {
   STALE_LOCK_TIMEOUT_MS: 120000, // 2 minutes
   MAX_LOCK_WAIT_MS: 30000, // 30 seconds
 
-  // Helper Doc Sheet IDs (one per bot)
+  // EMERGENCY KILL SWITCH: Set this to true to make all running executions exit immediately
+  // Use this when you need to kill zombie executions
+  // IMPORTANT: Deploy with this as FALSE normally, only set to TRUE during emergency cleanup
+  EMERGENCY_SHUTDOWN: false,
+
+  // Helper Doc Sheet ID (single bot for batch processing)
   HELPER_DOCS: {
+    'BATCH_BOT': '1VcpaoXllWGTB3APt9Gjhi4-D_1XUH4qldWiZYQlYoH0',  // Using BOT1's Helper Doc for batch mode
+    // Legacy bot IDs kept for backwards compatibility (but not actively used)
     'BOT1': '1VcpaoXllWGTB3APt9Gjhi4-D_1XUH4qldWiZYQlYoH0',
     'BOT2': '1dsEzEIm2GXtAPbqBYtwFYDFnE0PbgaaoAUAOXghIyeI',
-    'BOT3': '1RZm3lPGjRxiPqnLSpL0PFOhFGWcCL6zjQ1V8UjUUB4I',
-    'BOT4': 'REPLACE_WITH_BOT4_SHEET_ID',
-    'BOT5': 'REPLACE_WITH_BOT5_SHEET_ID'
+    'BOT3': '1RZm3lPGjRxiPqnLSpL0PFOhFGWcCL6zjQ1V8UjUUB4I'
   },
   HELPER_SHEET_NAME: 'Paste Here', // The tab name in Helper Docs
 
@@ -140,8 +145,16 @@ function doPost(e) {
         result = pullNextSQ(botId);
         break;
 
+      case 'pullNextBatchOfSQs':
+        result = pullNextBatchOfSQs(botId, params.batchSize || 20);
+        break;
+
       case 'uploadToRefundLog':
         result = uploadToRefundLog(params.sqData, params.manualData);
+        break;
+
+      case 'uploadBatchToRefundLog':
+        result = uploadBatchToRefundLog(botId, params.sqNumbers);
         break;
 
       case 'syncManualDataToHelper':
@@ -423,15 +436,20 @@ function releaseRefundLogReservation(botId, sqNumber) {
  */
 function getActiveClaims() {
   try {
+    const startTime = new Date().getTime();
     const url = QUEUE_CONFIG.CONVEX_URL + '/bot-manager/get-active-sessions';
 
     const options = {
       method: 'get',
-      muteHttpExceptions: true
+      muteHttpExceptions: true,
+      timeout: 5 // 5 second timeout
     };
 
     Logger.log('getActiveClaims: Fetching from ' + url);
     const response = UrlFetchApp.fetch(url, options);
+    const elapsed = new Date().getTime() - startTime;
+    Logger.log('getActiveClaims: Request took ' + elapsed + 'ms');
+
     const result = JSON.parse(response.getContentText());
     Logger.log('getActiveClaims: Response: ' + JSON.stringify(result));
 
@@ -581,17 +599,45 @@ function releaseSQ(botId, sqNumber) {
 /**
  * Pull next unclaimed SQ from Discrep Log
  * Returns SQ data and marks it as claimed by the bot
+ * LOCK OPTIMIZED: Only locks when writing to shared Discrepancy Log
  */
 function pullNextSQ(botId) {
+  // Validate botId
+  if (!botId) {
+    Logger.log('ERROR: pullNextSQ called with null/undefined botId');
+    return {success: false, message: 'Bot ID is required', sqData: null};
+  }
+
+  // Start timeout timer (3 minutes - operation took 2min14s in testing)
+  const startTime = new Date().getTime();
+  const TIMEOUT_MS = 180000; // 3 minutes - Apps Script has 6 min limit, gives plenty of room
+
+  function checkTimeout(operation) {
+    // EMERGENCY KILL SWITCH: Check if system is in shutdown mode
+    if (QUEUE_CONFIG.EMERGENCY_SHUTDOWN) {
+      const errorMsg = 'EMERGENCY SHUTDOWN ACTIVE - All operations halted';
+      Logger.log('[' + botId + '] 🛑 ' + errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    const elapsed = new Date().getTime() - startTime;
+    if (elapsed > TIMEOUT_MS) {
+      const errorMsg = 'Operation timed out after ' + Math.round(elapsed/1000) + 's during: ' + operation;
+      Logger.log('[' + botId + '] TIMEOUT: ' + errorMsg);
+      throw new Error(errorMsg);
+    }
+  }
+
+  function getRemainingTime() {
+    const elapsed = new Date().getTime() - startTime;
+    return TIMEOUT_MS - elapsed;
+  }
+
   // Reset session timestamp to keep session alive
   touchBotSession(botId);
 
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return {success: false, message: 'Failed to acquire lock', sqData: null};
-  }
-
   try {
+    checkTimeout('initialization');
     const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
     const discrepSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_SHEET_NAME);
 
@@ -599,77 +645,124 @@ function pullNextSQ(botId) {
       return {success: false, message: 'Sheet "' + QUEUE_CONFIG.DISCREP_SHEET_NAME + '" not found', sqData: null};
     }
 
-    const data = discrepSheet.getDataRange().getValues();
+    // TEMPORARILY DISABLED: Convex pre-fetch causing timeouts
+    // This optimization is skipped - tryReserveSQ will still prevent duplicate claims
+    let convexClaimedSQs = [];
+    Logger.log('[' + botId + '] Skipping Convex pre-fetch (disabled due to timeout issues)');
+    Logger.log('[' + botId + '] Duplicate prevention will happen via tryReserveSQ instead');
 
-    // Column indices matching HelperDocAutomation.gs DISCREP_COLS
-    const COL_SQ_NUMBER = 2;      // Column C
-    const COL_GAME = 3;           // Column D
-    const COL_CARD_NAME = 4;      // Column E
-    const COL_COLLECTOR_NUM = 5;  // Column F
-    const COL_RARITY = 6;         // Column G
-    const COL_SET_NAME = 7;       // Column H
-    const COL_CONDITION = 8;      // Column I
-    const COL_QTY = 9;            // Column J
-    const COL_LOCATION_ID = 10;   // Column K (LocationID - skip if "The Vault")
-    const COL_INITIALS = 14;      // Column O (Inv. Initials - for claiming)
-    const COL_RESOLUTION_TYPE = 15; // Column P (Resolution Type - "Missing Note")
-    const COL_SOLVE_DATE = 17;    // Column R (Solve Date)
-    const COL_MANUAL_INTERVENTION = 18; // Column S (IN THE VAULT - skip if has value)
+    /* DISABLED FOR DEBUGGING - RE-ENABLE ONCE CONVEX PERFORMANCE IMPROVES
+    // Get list of already-claimed SQs from Convex to avoid race conditions
+    // This is optional - if it fails or times out, tryReserveSQ will still prevent duplicates
+    const remaining = getRemainingTime();
 
-    // Note: Order Number and Buyer Name come from Helper Doc, not Discrep Log
+    if (remaining < 5000) {
+      Logger.log('[' + botId + '] Skipping Convex fetch - not enough time remaining (' + Math.round(remaining/1000) + 's)');
+    } else {
+      try {
+        checkTimeout('pre-Convex-fetch');
+        const convexUrl = QUEUE_CONFIG.CONVEX_URL + '/bot-manager/get-claimed-sqs';
+        Logger.log('[' + botId + '] Fetching claimed SQs from Convex with 3s timeout...');
 
-    // Step 1: Find all unclaimed items matching skip criteria
-    const unclaimedItems = [];
+        const convexResponse = UrlFetchApp.fetch(convexUrl, {
+          method: 'get',
+          muteHttpExceptions: true,
+          validateHttpsCertificates: false,
+          timeout: 3 // 3 second timeout
+        });
 
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-      const initials = row[COL_INITIALS];
-      const solveDate = row[COL_SOLVE_DATE];
-      const manualIntervention = row[COL_MANUAL_INTERVENTION];
-      const locationId = row[COL_LOCATION_ID];
-      const sqNumber = row[COL_SQ_NUMBER];
+        checkTimeout('post-Convex-fetch');
+        const responseText = convexResponse.getContentText();
 
-      // Skip if SQ number is empty
+        if (responseText) {
+          const convexResult = JSON.parse(responseText);
+          if (convexResult.success && convexResult.claimedSQs) {
+            convexClaimedSQs = convexResult.claimedSQs;
+            Logger.log('[' + botId + '] Convex reports ' + convexClaimedSQs.length + ' already claimed SQs');
+          }
+        }
+      } catch (convexError) {
+        Logger.log('[' + botId + '] Convex fetch failed: ' + convexError.toString());
+      }
+    }
+    */
+
+    checkTimeout('pre-data-fetch');
+    Logger.log('[' + botId + '] Fetching Discrepancy Log data (optimized scan)...');
+
+    // Column indices - same as working.gs CONFIG.DISCREP_COLS
+    const COL_SQ_NUMBER = 2;            // Column C
+    const COL_GAME = 3;                 // Column D
+    const COL_CARD_NAME = 4;            // Column E
+    const COL_COLLECTOR_NUM = 5;        // Column F
+    const COL_RARITY = 6;               // Column G
+    const COL_SET_NAME = 7;             // Column H
+    const COL_CONDITION = 8;            // Column I
+    const COL_QTY = 9;                  // Column J
+    const COL_LOCATION_ID = 10;         // Column K
+    const COL_INITIALS = 14;            // Column O (Inv. Initials)
+    const COL_RESOLUTION_TYPE = 15;     // Column P (Resolution Type)
+    const COL_SOLVE_DATE = 17;          // Column R (Solve Date)
+    const COL_MANUAL_INTERVENTION = 18; // Column S (Manual/IN THE VAULT)
+
+    // OPTIMIZATION: Read only the columns we need for filtering (C, K, O, R, S)
+    // This is much faster than reading all 23 columns
+    const totalRows = discrepSheet.getLastRow();
+    Logger.log('[' + botId + '] Sheet has ' + totalRows + ' rows - reading filter columns only...');
+
+    // Read just columns C (SQ#), K (Location), O (Initials), R (Solve Date), S (Manual)
+    const filterData = discrepSheet.getRange(2, 3, totalRows - 1, 1).getValues() // Column C
+      .map(function(row, idx) {
+        return {
+          rowIndex: idx + 2, // 1-based row number
+          sqNumber: row[0]
+        };
+      });
+
+    // Read columns O, P, Q, R, S for all rows at once
+    const statusColumns = discrepSheet.getRange(2, 15, totalRows - 1, 5).getValues(); // O-S (cols 15-19)
+
+    checkTimeout('post-filter-data-fetch');
+    Logger.log('[' + botId + '] Loaded filter data for ' + filterData.length + ' rows');
+
+    // Build map of unclaimed SQ numbers
+    const unclaimedSQMap = {}; // {sqNumber: [rowIndex1, rowIndex2, ...]}
+
+    for (let i = 0; i < filterData.length; i++) {
+      const sqNumber = filterData[i].sqNumber;
+      const rowIndex = filterData[i].rowIndex;
+      const initials = statusColumns[i][0]; // Column O (Initials)
+      const solveDate = statusColumns[i][3]; // Column R (Solve Date)
+      const manualIntervention = statusColumns[i][4]; // Column S (Manual/Vault)
+
+      // Skip if empty SQ number
       if (!sqNumber) continue;
 
-      // Skip if already has initials (claimed)
+      // Skip if claimed, solved, or in vault
       if (initials) continue;
-
-      // Skip if already has solve date (already solved)
       if (solveDate) continue;
+      if (manualIntervention && manualIntervention.toString().toLowerCase().includes('vault')) continue;
 
-      // Skip if has manual intervention flag (column S = "IN THE VAULT")
-      if (manualIntervention) continue;
-
-      // Skip if location ID is "The Vault" (column K)
-      if (locationId && locationId.toString().toLowerCase().includes('vault')) continue;
-
-      // This row is unclaimed
-      unclaimedItems.push({
-        rowIndex: i + 1, // 1-based for sheet access
-        sqNumber: sqNumber,
-        game: row[COL_GAME] || 'Magic: The Gathering',
-        cardName: row[COL_CARD_NAME] || '',
-        collectorNum: row[COL_COLLECTOR_NUM] || '',
-        rarity: row[COL_RARITY] || '',
-        setName: row[COL_SET_NAME] || '',
-        condition: row[COL_CONDITION] || '',
-        qty: row[COL_QTY] || 1
-      });
+      // This row is unclaimed - add to map
+      if (!unclaimedSQMap[sqNumber]) {
+        unclaimedSQMap[sqNumber] = [];
+      }
+      unclaimedSQMap[sqNumber].push(rowIndex);
     }
 
-    if (unclaimedItems.length === 0) {
+    const uniqueSQs = Object.keys(unclaimedSQMap);
+    Logger.log('[' + botId + '] Found ' + uniqueSQs.length + ' unclaimed SQ(s)');
+
+    if (uniqueSQs.length === 0) {
       return {success: false, message: 'No unclaimed SQs available', sqData: null};
     }
 
-    // Step 2: Find first SQ that is FULLY unclaimed (all rows for that SQ have no issues)
-    const uniqueSQs = [...new Set(unclaimedItems.map(item => item.sqNumber))];
-
-    // RETRY LOOP: Keep trying SQs until we successfully claim one via Convex queue
+    // RETRY LOOP: Try SQs in order until we successfully claim one
     for (const sqNumber of uniqueSQs) {
-      const itemsForSQ = unclaimedItems.filter(item => item.sqNumber === sqNumber);
+      checkTimeout('SQ retry loop iteration');
 
-      Logger.log('[' + botId + '] Found fully unclaimed SQ: ' + sqNumber + ' (' + itemsForSQ.length + ' rows) - attempting Convex queue reservation...');
+      const rowIndices = unclaimedSQMap[sqNumber];
+      Logger.log('[' + botId + '] Trying SQ: ' + sqNumber + ' (' + rowIndices.length + ' rows) - attempting Convex queue reservation...');
 
       // Try to reserve this SQ in Convex queue (prevents race conditions)
       if (!tryReserveSQ(botId, sqNumber)) {
@@ -677,25 +770,65 @@ function pullNextSQ(botId) {
         continue; // Another bot reserved it first - try next SQ
       }
 
-      Logger.log('[' + botId + '] ✓ Convex reserved SQ ' + sqNumber + ' - claiming rows in Discrepancy Log...');
+      Logger.log('[' + botId + '] ✓ Convex reserved SQ ' + sqNumber + ' - reading full data for these rows...');
+
+      // Now read the full data for all rows of this SQ
+      // We need columns D-K (Game, Card Name, Collector#, Rarity, Set, Condition, Qty, Location)
+      const itemsForSQ = [];
+      const GAME_IDX = 3; // Column D
+
+      for (const rowIdx of rowIndices) {
+        const rowData = discrepSheet.getRange(rowIdx, 1, 1, 23).getValues()[0];
+        itemsForSQ.push({
+          rowIndex: rowIdx,
+          sqNumber: sqNumber,
+          game: rowData[GAME_IDX] || 'Magic: The Gathering',
+          cardName: rowData[COL_CARD_NAME] || '',
+          collectorNum: rowData[COL_COLLECTOR_NUM] || '',
+          rarity: rowData[COL_RARITY] || '',
+          setName: rowData[COL_SET_NAME] || '',
+          condition: rowData[COL_CONDITION] || '',
+          qty: rowData[COL_QTY] || 1
+        });
+      }
+
+      Logger.log('[' + botId + '] Read full data for ' + itemsForSQ.length + ' rows');
 
       // Claim ALL rows for this SQ (Convex already reserved it for us)
+      // LOCK ONLY FOR THIS WRITE to shared Discrepancy Log
+      const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
+      if (!lock) {
+        Logger.log('[' + botId + '] ⚠️ Failed to acquire lock for claiming rows - releasing SQ reservation');
+        releaseSQ(botId, sqNumber);
+        continue; // Try next SQ
+      }
+
       const now = new Date();
 
       try {
         Logger.log('[' + botId + '] Claiming ' + itemsForSQ.length + ' rows for SQ ' + sqNumber);
 
+        // Claim rows one-by-one (same as working.gs)
+        let claimedCount = 0;
         for (const item of itemsForSQ) {
           discrepSheet.getRange(item.rowIndex, COL_INITIALS + 1).setValue(botId);
           discrepSheet.getRange(item.rowIndex, COL_RESOLUTION_TYPE + 1).setValue('Missing Note');
           discrepSheet.getRange(item.rowIndex, COL_SOLVE_DATE + 1).setValue(now);
+          claimedCount++;
+
+          if (claimedCount % 10 === 0) {
+            Logger.log('  Claimed ' + claimedCount + '/' + itemsForSQ.length + ' rows...');
+          }
         }
 
         SpreadsheetApp.flush();
+        lock.releaseLock(); // Release immediately after write
 
+        checkTimeout('claiming rows');
         Logger.log('[' + botId + '] ✓ Claimed ' + itemsForSQ.length + ' rows for SQ ' + sqNumber);
 
         // Write ALL rows to Helper Doc and read back complete data
+        checkTimeout('pre-helper-doc-access');
         const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
         const missingFields = [];
         let completeItems = []; // Will be populated from Helper Doc
@@ -730,10 +863,12 @@ function pullNextSQ(botId) {
               helperSheet.getRange(3, 10, rowsData.length, rowsData[0].length).setValues(rowsData);
               SpreadsheetApp.flush();
 
+              checkTimeout('writing to Helper Doc');
               Logger.log('[' + botId + '] Wrote ' + itemsForSQ.length + ' rows to Helper Doc');
 
               // Wait for formulas to load (especially SQ link in G3)
               Utilities.sleep(2000);
+              checkTimeout('waiting for Helper Doc formulas');
 
               // Get SQ link from cell G3 (column 7)
               const sqLinkCell = helperSheet.getRange(3, 7); // Column G
@@ -763,6 +898,7 @@ function pullNextSQ(botId) {
 
               // Read ALL rows back from Helper Doc to get complete data with order/buyer info
               // Columns: H=Order#, I=Buyer, J=SQ#, K=Game, L=Card, M=Collector#, N=Rarity, O=Set, P=Condition, Q=Qty
+              checkTimeout('reading back Helper Doc data');
               const allHelperData = helperSheet.getRange(3, 8, itemsForSQ.length, 10).getValues(); // Columns H-Q (8-17)
 
               // Check if ANY row is missing order/buyer data
@@ -828,6 +964,7 @@ function pullNextSQ(botId) {
 
       } catch (claimError) {
         Logger.log('[' + botId + '] ERROR: Failed to claim SQ ' + sqNumber + ': ' + claimError);
+        if (lock) lock.releaseLock(); // Release lock if still held
         // Release queue reservation before trying next SQ
         releaseSQ(botId, sqNumber);
         // Try next SQ
@@ -840,26 +977,313 @@ function pullNextSQ(botId) {
   } catch (e) {
     Logger.log('ERROR in pullNextSQ: ' + e);
     return {success: false, message: 'Exception: ' + e.message, sqData: null};
-  } finally {
-    lock.releaseLock();
+  }
+}
+
+/**
+ * Pull next BATCH of unclaimed SQs from Discrep Log (for batch processing mode)
+ * Claims multiple SQs at once and writes all to Helper Doc grouped by SQ number
+ * Returns array of SQ objects with metadata for UI processing
+ */
+function pullNextBatchOfSQs(botId, batchSize) {
+  // Validate botId
+  if (!botId) {
+    Logger.log('ERROR: pullNextBatchOfSQs called with null/undefined botId');
+    return {success: false, message: 'Bot ID is required', sqBatch: null};
+  }
+
+  const startTime = new Date().getTime();
+  const TIMEOUT_MS = 180000; // 3 minutes
+
+  function checkTimeout(operation) {
+    if (QUEUE_CONFIG.EMERGENCY_SHUTDOWN) {
+      const errorMsg = 'EMERGENCY SHUTDOWN ACTIVE - All operations halted';
+      Logger.log('[' + botId + '] 🛑 ' + errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    const elapsed = new Date().getTime() - startTime;
+    if (elapsed > TIMEOUT_MS) {
+      const errorMsg = 'Operation timed out after ' + Math.round(elapsed/1000) + 's during: ' + operation;
+      Logger.log('[' + botId + '] TIMEOUT: ' + errorMsg);
+      throw new Error(errorMsg);
+    }
+  }
+
+  // Reset session timestamp to keep session alive
+  touchBotSession(botId);
+
+  try {
+    checkTimeout('initialization');
+    const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
+    const discrepSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_SHEET_NAME);
+
+    if (!discrepSheet) {
+      return {success: false, message: 'Sheet "' + QUEUE_CONFIG.DISCREP_SHEET_NAME + '" not found', sqBatch: null};
+    }
+
+    Logger.log('[' + botId + '] Fetching Discrepancy Log data for batch of ' + batchSize + ' SQs...');
+
+    // Column indices
+    const COL_SQ_NUMBER = 2;
+    const COL_GAME = 3;
+    const COL_CARD_NAME = 4;
+    const COL_COLLECTOR_NUM = 5;
+    const COL_RARITY = 6;
+    const COL_SET_NAME = 7;
+    const COL_CONDITION = 8;
+    const COL_QTY = 9;
+    const COL_LOCATION_ID = 10;
+    const COL_INITIALS = 14;
+    const COL_RESOLUTION_TYPE = 15;
+    const COL_SOLVE_DATE = 17;
+    const COL_MANUAL_INTERVENTION = 18;
+
+    const totalRows = discrepSheet.getLastRow();
+    Logger.log('[' + botId + '] Sheet has ' + totalRows + ' rows - reading filter columns...');
+
+    // Read SQ numbers and status columns
+    const filterData = discrepSheet.getRange(2, 3, totalRows - 1, 1).getValues()
+      .map(function(row, idx) {
+        return {
+          rowIndex: idx + 2,
+          sqNumber: row[0]
+        };
+      });
+
+    const statusColumns = discrepSheet.getRange(2, 15, totalRows - 1, 5).getValues(); // O-S (cols 15-19)
+
+    checkTimeout('post-filter-data-fetch');
+
+    // Build map of unclaimed SQ numbers
+    const unclaimedSQMap = {}; // {sqNumber: [rowIndex1, rowIndex2, ...]}
+
+    for (let i = 0; i < filterData.length; i++) {
+      const sqNumber = filterData[i].sqNumber;
+      const rowIndex = filterData[i].rowIndex;
+      const initials = statusColumns[i][0]; // Column O (Initials)
+      const solveDate = statusColumns[i][3]; // Column R (Solve Date)
+      const manualIntervention = statusColumns[i][4]; // Column S (Manual/Vault)
+
+      if (!sqNumber) continue;
+      if (initials) continue;
+      if (solveDate) continue;
+      if (manualIntervention && manualIntervention.toString().toLowerCase().includes('vault')) continue;
+
+      if (!unclaimedSQMap[sqNumber]) {
+        unclaimedSQMap[sqNumber] = [];
+      }
+      unclaimedSQMap[sqNumber].push(rowIndex);
+    }
+
+    const uniqueSQs = Object.keys(unclaimedSQMap);
+    Logger.log('[' + botId + '] Found ' + uniqueSQs.length + ' unclaimed SQ(s)');
+
+    if (uniqueSQs.length === 0) {
+      return {success: false, message: 'No unclaimed SQs available', sqBatch: null};
+    }
+
+    // Claim up to batchSize SQs
+    const claimedSQs = [];
+    const sqBatch = []; // Array of {sqNumber, sqLink, rowCount, rows: [...]}
+
+    for (let sqIdx = 0; sqIdx < Math.min(batchSize, uniqueSQs.length); sqIdx++) {
+      checkTimeout('SQ batch loop iteration ' + sqIdx);
+
+      const sqNumber = uniqueSQs[sqIdx];
+      const rowIndices = unclaimedSQMap[sqNumber];
+
+      Logger.log('[' + botId + '] [' + (sqIdx + 1) + '/' + batchSize + '] Trying SQ: ' + sqNumber + ' (' + rowIndices.length + ' rows)');
+
+      // Try to reserve this SQ in Convex queue
+      if (!tryReserveSQ(botId, sqNumber)) {
+        Logger.log('[' + botId + '] ⚠️ Failed to reserve SQ ' + sqNumber + ' - skipping');
+        continue;
+      }
+
+      Logger.log('[' + botId + '] ✓ Convex reserved SQ ' + sqNumber);
+
+      // Read full data for all rows of this SQ
+      const itemsForSQ = [];
+      const GAME_IDX = 3;
+
+      for (const rowIdx of rowIndices) {
+        const rowData = discrepSheet.getRange(rowIdx, 1, 1, 23).getValues()[0];
+        itemsForSQ.push({
+          rowIndex: rowIdx,
+          sqNumber: sqNumber,
+          game: rowData[GAME_IDX] || 'Magic: The Gathering',
+          cardName: rowData[COL_CARD_NAME] || '',
+          collectorNum: rowData[COL_COLLECTOR_NUM] || '',
+          rarity: rowData[COL_RARITY] || '',
+          setName: rowData[COL_SET_NAME] || '',
+          condition: rowData[COL_CONDITION] || '',
+          qty: rowData[COL_QTY] || 1
+        });
+      }
+
+      // Claim rows in Discrepancy Log
+      const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
+      if (!lock) {
+        Logger.log('[' + botId + '] ⚠️ Failed to acquire lock - releasing SQ ' + sqNumber);
+        releaseSQ(botId, sqNumber);
+        continue;
+      }
+
+      const now = new Date();
+      try {
+        for (const item of itemsForSQ) {
+          discrepSheet.getRange(item.rowIndex, COL_INITIALS + 1).setValue(botId);
+          discrepSheet.getRange(item.rowIndex, COL_RESOLUTION_TYPE + 1).setValue('Missing Note');
+          discrepSheet.getRange(item.rowIndex, COL_SOLVE_DATE + 1).setValue(now);
+        }
+        SpreadsheetApp.flush();
+        lock.releaseLock();
+
+        Logger.log('[' + botId + '] ✓ Claimed ' + itemsForSQ.length + ' rows for SQ ' + sqNumber);
+        claimedSQs.push({sqNumber: sqNumber, items: itemsForSQ});
+
+      } catch (claimError) {
+        Logger.log('[' + botId + '] ERROR claiming SQ ' + sqNumber + ': ' + claimError);
+        if (lock) lock.releaseLock();
+        releaseSQ(botId, sqNumber);
+        continue;
+      }
+    }
+
+    if (claimedSQs.length === 0) {
+      return {success: false, message: 'Failed to claim any SQs from batch', sqBatch: null};
+    }
+
+    Logger.log('[' + botId + '] Successfully claimed ' + claimedSQs.length + ' SQs');
+
+    // Write ALL SQs to Helper Doc (grouped by SQ number)
+    checkTimeout('pre-helper-doc-write');
+    const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
+
+    if (!helperDocId) {
+      return {success: false, message: 'Helper Doc not configured for ' + botId, sqBatch: null};
+    }
+
+    const helperDoc = SpreadsheetApp.openById(helperDocId);
+    const helperSheet = helperDoc.getSheetByName(QUEUE_CONFIG.HELPER_SHEET_NAME);
+
+    if (!helperSheet) {
+      return {success: false, message: 'Helper sheet not found', sqBatch: null};
+    }
+
+    // Clear existing data
+    const lastRow = helperSheet.getLastRow();
+    if (lastRow > 2) {
+      helperSheet.getRange(3, 1, lastRow - 2, helperSheet.getLastColumn()).clearContent();
+    }
+
+    // Write all SQs grouped by SQ number
+    let currentRow = 3;
+    for (const sq of claimedSQs) {
+      const rowsData = sq.items.map(item => [
+        item.sqNumber,     // Column J
+        item.game,         // Column K
+        item.cardName,     // Column L
+        item.collectorNum, // Column M
+        item.rarity,       // Column N
+        item.setName,      // Column O
+        item.condition,    // Column P
+        item.qty           // Column Q
+      ]);
+
+      // Write this SQ's rows
+      helperSheet.getRange(currentRow, 10, rowsData.length, rowsData[0].length).setValues(rowsData);
+      currentRow += rowsData.length;
+    }
+
+    SpreadsheetApp.flush();
+    Logger.log('[' + botId + '] Wrote ' + (currentRow - 3) + ' total rows to Helper Doc');
+
+    // Wait for formulas to populate
+    Utilities.sleep(2000);
+    checkTimeout('waiting for Helper Doc formulas');
+
+    // Read back all data with order/buyer info and build sqBatch array
+    const allHelperData = helperSheet.getRange(3, 1, currentRow - 3, 17).getValues(); // Columns A-Q
+
+    let rowIdx = 0;
+    for (const sq of claimedSQs) {
+      const sqRows = [];
+      let sqLink = '';
+
+      for (let i = 0; i < sq.items.length; i++) {
+        const row = allHelperData[rowIdx];
+
+        // Get SQ link from column G (index 6) of first row for this SQ
+        if (i === 0) {
+          const sqLinkCell = helperSheet.getRange(rowIdx + 3, 7);
+          try {
+            const richTextValue = sqLinkCell.getRichTextValue();
+            if (richTextValue) {
+              const url = richTextValue.getLinkUrl();
+              if (url) sqLink = url;
+            }
+          } catch (e) {
+            // Fallback to cell value
+            const cellValue = sqLinkCell.getValue();
+            if (cellValue && typeof cellValue === 'string' && cellValue.toString().startsWith('http')) {
+              sqLink = cellValue.toString();
+            }
+          }
+        }
+
+        sqRows.push({
+          orderNumber: row[7] || '',   // Column H
+          buyerName: row[8] || '',     // Column I
+          sqNumber: row[9],            // Column J
+          game: row[10],               // Column K
+          cardName: row[11],           // Column L
+          collectorNum: row[12],       // Column M
+          rarity: row[13],             // Column N
+          setName: row[14],            // Column O
+          condition: row[15],          // Column P
+          qty: row[16]                 // Column Q
+        });
+
+        rowIdx++;
+      }
+
+      sqBatch.push({
+        sqNumber: sq.sqNumber,
+        sqLink: sqLink,
+        rowCount: sqRows.length,
+        rows: sqRows
+      });
+    }
+
+    Logger.log('[' + botId + '] 🎉 Successfully claimed batch of ' + sqBatch.length + ' SQs');
+
+    return {
+      success: true,
+      message: 'Claimed ' + sqBatch.length + ' SQs successfully',
+      sqBatch: sqBatch,
+      totalSQs: sqBatch.length,
+      totalRows: rowIdx
+    };
+
+  } catch (e) {
+    Logger.log('ERROR in pullNextBatchOfSQs: ' + e);
+    return {success: false, message: 'Exception: ' + e.message, sqBatch: null};
   }
 }
 
 /**
  * Upload SQ data to Refund Log by reading directly from Helper Doc
  * Much simpler and more reliable than passing data through UI
+ * LOCK OPTIMIZED: Only locks when writing to shared Refund Log
  */
 function uploadToRefundLog(botId, sqNumber) {
   // Reset session timestamp to keep session alive
   touchBotSession(botId);
 
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return {success: false, message: 'Failed to acquire lock', rows: null};
-  }
-
   try {
-    // Get Helper Doc for this bot
+    // Get Helper Doc for this bot (NO LOCK - per-bot resource)
     const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
     if (!helperDocId) {
       return {success: false, message: 'Helper Doc not configured for ' + botId, rows: null};
@@ -872,14 +1296,22 @@ function uploadToRefundLog(botId, sqNumber) {
       return {success: false, message: 'Helper sheet not found', rows: null};
     }
 
-    // Read ALL data from Helper Doc
+    // Read ALL data from Helper Doc (NO LOCK - exclusive bot access)
     const helperData = helperSheet.getDataRange().getValues();
+
+    Logger.log(`uploadToRefundLog: Helper Doc has ${helperData.length} total rows (including headers)`);
+    Logger.log(`uploadToRefundLog: Looking for SQ number: "${sqNumber}"`);
 
     // Find all rows for this SQ (starting from row 3, rows 1-2 are headers)
     const rowsForSQ = [];
     for (let i = 2; i < helperData.length; i++) {
       const row = helperData[i];
       const rowSQ = row[QUEUE_CONFIG.HELPER_COLS.SQ_NUMBER];
+
+      // Log first few rows to debug
+      if (i < 5) {
+        Logger.log(`  Row ${i + 1}: SQ="${rowSQ}", Card="${row[QUEUE_CONFIG.HELPER_COLS.CARD_NAME]}"`);
+      }
 
       if (rowSQ === sqNumber) {
         rowsForSQ.push({
@@ -898,7 +1330,9 @@ function uploadToRefundLog(botId, sqNumber) {
     }
 
     if (rowsForSQ.length === 0) {
-      return {success: false, message: 'No data found in Helper Doc for SQ ' + sqNumber, rows: null};
+      Logger.log(`⚠️ uploadToRefundLog: No rows found matching SQ "${sqNumber}"`);
+      Logger.log(`⚠️ Possible causes: (1) Helper Doc was cleared, (2) Wrong SQ number, (3) Data not yet written`);
+      return {success: false, message: 'No data found in Helper Doc for SQ ' + sqNumber + '. Did you pull this SQ first?', rows: null};
     }
 
     Logger.log(`uploadToRefundLog: Found ${rowsForSQ.length} rows in Helper Doc for SQ ${sqNumber}`);
@@ -908,18 +1342,7 @@ function uploadToRefundLog(botId, sqNumber) {
       Logger.log(`  Row ${i + 1}: order="${rowsForSQ[i].orderNumber}", buyer="${rowsForSQ[i].buyerName}", card="${rowsForSQ[i].cardName}"`);
     }
 
-    // Open Refund Log
-    const refundLog = SpreadsheetApp.openById(QUEUE_CONFIG.REFUND_LOG_ID);
-    const refundSheet = refundLog.getSheetByName('Refund Log');
-
-    if (!refundSheet) {
-      return {success: false, message: 'Refund Log sheet not found', rows: null};
-    }
-
-    // Get next available row
-    const nextRow = refundSheet.getLastRow() + 1;
-
-    // Prepare all rows for Refund Log
+    // Prepare all rows for Refund Log (NO LOCK YET - just preparing data)
     const rowsToWrite = rowsForSQ.map(item => {
       const rowData = Array(12).fill(''); // Columns A-L
       rowData[0] = new Date();                    // Column A (Date)
@@ -937,46 +1360,205 @@ function uploadToRefundLog(botId, sqNumber) {
       return rowData;
     });
 
-    // Write all rows to Refund Log at once
-    refundSheet.getRange(nextRow, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
-    // Format date column
-    refundSheet.getRange(nextRow, 1, rowsToWrite.length, 1).setNumberFormat('m/d/yyyy');
-    SpreadsheetApp.flush();
+    // LOCK ONLY FOR WRITING to shared Refund Log
+    const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
+    if (!lock) {
+      return {success: false, message: 'Failed to acquire lock for Refund Log write', rows: null};
+    }
 
-    Logger.log(`✓ Uploaded ${rowsToWrite.length} rows to Refund Log starting at row ${nextRow}`);
+    try {
+      // Open Refund Log
+      const refundLog = SpreadsheetApp.openById(QUEUE_CONFIG.REFUND_LOG_ID);
+      const refundSheet = refundLog.getSheetByName('Refund Log');
 
-    // Clear Helper Doc after successful upload
-    helperSheet.getRange(3, 1, helperSheet.getLastRow() - 2, helperSheet.getLastColumn()).clearContent();
-    SpreadsheetApp.flush();
-    Logger.log(`✓ Cleared Helper Doc for ${botId}`);
+      if (!refundSheet) {
+        return {success: false, message: 'Refund Log sheet not found', rows: null};
+      }
 
-    return {
-      success: true,
-      message: `Uploaded ${rowsToWrite.length} item(s) to Refund Log`,
-      rows: rowsToWrite.length,
-      startRow: nextRow
-    };
+      // Get next available row
+      const nextRow = refundSheet.getLastRow() + 1;
+
+      // Write all rows to Refund Log at once
+      refundSheet.getRange(nextRow, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
+      // Format date column
+      refundSheet.getRange(nextRow, 1, rowsToWrite.length, 1).setNumberFormat('m/d/yyyy');
+      SpreadsheetApp.flush();
+
+      lock.releaseLock(); // Release immediately after write
+
+      Logger.log(`✓ Uploaded ${rowsToWrite.length} rows to Refund Log starting at row ${nextRow}`);
+
+      // Clear Helper Doc after successful upload (NO LOCK - per-bot resource)
+      helperSheet.getRange(3, 1, helperSheet.getLastRow() - 2, helperSheet.getLastColumn()).clearContent();
+      SpreadsheetApp.flush();
+      Logger.log(`✓ Cleared Helper Doc for ${botId}`);
+
+      return {
+        success: true,
+        message: `Uploaded ${rowsToWrite.length} item(s) to Refund Log`,
+        rows: rowsToWrite.length,
+        startRow: nextRow
+      };
+
+    } catch (writeError) {
+      lock.releaseLock();
+      throw writeError;
+    }
 
   } catch (e) {
     Logger.log('ERROR in uploadToRefundLog: ' + e);
     return {success: false, message: 'Exception: ' + e.message, rows: null};
-  } finally {
-    lock.releaseLock();
+  }
+}
+
+/**
+ * Upload BATCH of SQ data to Refund Log by reading directly from Helper Doc
+ * Handles multiple SQs at once - reads all rows from Helper Doc and uploads to Refund Log
+ * NO LOCK NEEDED for Helper Doc read - Only locks when writing to shared Refund Log
+ */
+function uploadBatchToRefundLog(botId, sqNumbers) {
+  // Reset session timestamp to keep session alive
+  touchBotSession(botId);
+
+  try {
+    // Validate input
+    if (!sqNumbers || !Array.isArray(sqNumbers) || sqNumbers.length === 0) {
+      return {success: false, message: 'Invalid sqNumbers array', rows: null};
+    }
+
+    Logger.log(`uploadBatchToRefundLog: Processing ${sqNumbers.length} SQs for ${botId}`);
+
+    // Get Helper Doc for this bot (NO LOCK - per-bot resource)
+    const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
+    if (!helperDocId) {
+      return {success: false, message: 'Helper Doc not configured for ' + botId, rows: null};
+    }
+
+    const helperDoc = SpreadsheetApp.openById(helperDocId);
+    const helperSheet = helperDoc.getSheetByName(QUEUE_CONFIG.HELPER_SHEET_NAME);
+
+    if (!helperSheet) {
+      return {success: false, message: 'Helper sheet not found', rows: null};
+    }
+
+    // Read ALL data from Helper Doc (NO LOCK - exclusive bot access)
+    const helperData = helperSheet.getDataRange().getValues();
+
+    Logger.log(`uploadBatchToRefundLog: Helper Doc has ${helperData.length} total rows (including headers)`);
+
+    // Find all rows for ALL SQs in the batch
+    const allRowsForBatch = [];
+    for (let i = 2; i < helperData.length; i++) {
+      const row = helperData[i];
+      const rowSQ = row[QUEUE_CONFIG.HELPER_COLS.SQ_NUMBER];
+
+      // Check if this row belongs to any of the SQs in our batch
+      if (sqNumbers.indexOf(rowSQ) !== -1) {
+        allRowsForBatch.push({
+          orderNumber: row[QUEUE_CONFIG.HELPER_COLS.ORDER_NUMBER] || '',
+          buyerName: row[QUEUE_CONFIG.HELPER_COLS.BUYER_NAME] || '',
+          sqNumber: row[QUEUE_CONFIG.HELPER_COLS.SQ_NUMBER] || '',
+          game: row[QUEUE_CONFIG.HELPER_COLS.GAME] || 'Magic: The Gathering',
+          cardName: row[QUEUE_CONFIG.HELPER_COLS.CARD_NAME] || '',
+          collectorNum: row[QUEUE_CONFIG.HELPER_COLS.COLLECTOR_NUM] || '',
+          rarity: row[QUEUE_CONFIG.HELPER_COLS.RARITY] || '',
+          setName: row[QUEUE_CONFIG.HELPER_COLS.SET_NAME] || '',
+          condition: row[QUEUE_CONFIG.HELPER_COLS.CONDITION] || '',
+          qty: row[QUEUE_CONFIG.HELPER_COLS.QTY] || 1
+        });
+      }
+    }
+
+    if (allRowsForBatch.length === 0) {
+      Logger.log(`⚠️ uploadBatchToRefundLog: No rows found for SQs: ${sqNumbers.join(', ')}`);
+      return {success: false, message: 'No data found in Helper Doc for specified SQs', rows: null};
+    }
+
+    Logger.log(`uploadBatchToRefundLog: Found ${allRowsForBatch.length} total rows for batch`);
+
+    // Prepare all rows for Refund Log (NO LOCK YET - just preparing data)
+    const rowsToWrite = allRowsForBatch.map(item => {
+      const rowData = Array(12).fill(''); // Columns A-L
+      rowData[0] = new Date();                    // Column A (Date)
+      // rowData[1] stays empty                   // Column B (order link or formula)
+      rowData[2] = item.orderNumber;              // Column C
+      rowData[3] = item.buyerName;                // Column D
+      rowData[4] = item.sqNumber;                 // Column E
+      rowData[5] = item.game;                     // Column F
+      rowData[6] = item.cardName;                 // Column G
+      rowData[7] = item.collectorNum;             // Column H
+      rowData[8] = item.rarity;                   // Column I
+      rowData[9] = item.setName;                  // Column J
+      rowData[10] = item.condition;               // Column K
+      rowData[11] = item.qty;                     // Column L
+      return rowData;
+    });
+
+    // LOCK ONLY FOR WRITING to shared Refund Log
+    const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
+    if (!lock) {
+      return {success: false, message: 'Failed to acquire lock for Refund Log write', rows: null};
+    }
+
+    try {
+      // Open Refund Log
+      const refundLog = SpreadsheetApp.openById(QUEUE_CONFIG.REFUND_LOG_ID);
+      const refundSheet = refundLog.getSheetByName('Refund Log');
+
+      if (!refundSheet) {
+        return {success: false, message: 'Refund Log sheet not found', rows: null};
+      }
+
+      // Get next available row
+      const nextRow = refundSheet.getLastRow() + 1;
+
+      // Write all rows to Refund Log at once
+      refundSheet.getRange(nextRow, 1, rowsToWrite.length, rowsToWrite[0].length).setValues(rowsToWrite);
+      // Format date column
+      refundSheet.getRange(nextRow, 1, rowsToWrite.length, 1).setNumberFormat('m/d/yyyy');
+      SpreadsheetApp.flush();
+
+      lock.releaseLock(); // Release immediately after write
+
+      Logger.log(`✓ Uploaded ${rowsToWrite.length} rows to Refund Log starting at row ${nextRow}`);
+
+      // Clear Helper Doc after successful upload (NO LOCK - per-bot resource)
+      helperSheet.getRange(3, 1, helperSheet.getLastRow() - 2, helperSheet.getLastColumn()).clearContent();
+      SpreadsheetApp.flush();
+      Logger.log(`✓ Cleared Helper Doc for ${botId}`);
+
+      // Release all SQs from Convex queue
+      for (const sqNum of sqNumbers) {
+        releaseSQ(botId, sqNum);
+      }
+
+      return {
+        success: true,
+        message: `Uploaded ${rowsToWrite.length} item(s) from ${sqNumbers.length} SQ(s) to Refund Log`,
+        rows: rowsToWrite.length,
+        sqCount: sqNumbers.length,
+        startRow: nextRow
+      };
+
+    } catch (writeError) {
+      lock.releaseLock();
+      throw writeError;
+    }
+
+  } catch (e) {
+    Logger.log('ERROR in uploadBatchToRefundLog: ' + e);
+    return {success: false, message: 'Exception: ' + e.message, rows: null};
   }
 }
 
 /**
  * Sync manual data to Helper Doc
  * Updates the Helper Doc sheet with manually entered order/buyer info
+ * NO LOCK NEEDED - Each bot has exclusive access to their own Helper Doc via session
  */
 function syncManualDataToHelper(botId, sqNumber, manualData) {
   // Reset session timestamp to keep session alive
   touchBotSession(botId);
-
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return {success: false, message: 'Failed to acquire lock'};
-  }
 
   try {
     const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
@@ -1021,23 +1603,17 @@ function syncManualDataToHelper(botId, sqNumber, manualData) {
   } catch (e) {
     Logger.log('ERROR in syncManualDataToHelper: ' + e);
     return {success: false, message: 'Exception: ' + e.message};
-  } finally {
-    lock.releaseLock();
   }
 }
 
 /**
  * Sync ALL items to Helper Doc
  * Updates Helper Doc with complete array of items (each row may have different order/buyer)
+ * NO LOCK NEEDED - Each bot has exclusive access to their own Helper Doc via session
  */
 function syncAllItemsToHelper(botId, items) {
   // Reset session timestamp to keep session alive
   touchBotSession(botId);
-
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return {success: false, message: 'Failed to acquire lock'};
-  }
 
   try {
     const helperDocId = QUEUE_CONFIG.HELPER_DOCS[botId];
@@ -1075,22 +1651,16 @@ function syncAllItemsToHelper(botId, items) {
   } catch (e) {
     Logger.log('ERROR in syncAllItemsToHelper: ' + e);
     return {success: false, message: 'Exception: ' + e.message};
-  } finally {
-    lock.releaseLock();
   }
 }
 
 /**
  * Process PDF upload to extract Order Number and Buyer Name
+ * NO LOCK NEEDED - Only writes to bot's own Helper Doc (exclusive access via session)
  */
 function processPDFUpload(botId, sqNumber, base64Data, fileName) {
   // Reset session timestamp to keep session alive
   touchBotSession(botId);
-
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return {success: false, message: 'Failed to acquire lock'};
-  }
 
   try {
     Logger.log('[' + botId + '] Processing PDF upload: ' + fileName + ' for SQ ' + sqNumber);
@@ -1130,8 +1700,6 @@ function processPDFUpload(botId, sqNumber, base64Data, fileName) {
   } catch (e) {
     Logger.log('ERROR in processPDFUpload: ' + e);
     return {success: false, message: 'Failed to process PDF: ' + e.message};
-  } finally {
-    lock.releaseLock();
   }
 }
 
@@ -1292,9 +1860,10 @@ function normalizeNameLoose(name) {
 }
 
 /**
- * Find matching order for a card
+ * Find ALL matching orders for a card (handles multiple orders with same card)
+ * Returns array of {orderNumber, buyerName, quantity}
  */
-function findMatchingOrder(cardName, setName, condition, collectorNum, orders) {
+function findAllMatchingOrders(cardName, setName, condition, collectorNum, orders) {
   // Normalize names (exact / base / loose) for robust matching
   const normalizedCardName = normalizeNameExact(cardName);
   const baseCardName = normalizeNameExact(stripParentheticals(cardName));
@@ -1303,10 +1872,9 @@ function findMatchingOrder(cardName, setName, condition, collectorNum, orders) {
   const normalizedCondition = normalizeCondition(condition);
   const normalizedCollector = normalizeCollector(collectorNum);
 
-  // Fallback candidate if only condition differs
-  let weakCandidate = null;
-  // Collector-number-based fallback
-  let collectorCandidate = null;
+  const exactMatches = [];
+  const fallbackMatches = [];
+  const collectorMatches = [];
 
   for (const order of orders) {
     for (const card of order.cards) {
@@ -1325,45 +1893,59 @@ function findMatchingOrder(cardName, setName, condition, collectorNum, orders) {
       const matchesSet = pdfSetNorm.includes(csvSetNorm) || csvSetNorm.includes(pdfSetNorm);
       const matchesCondition = normalizeCondition(card.condition) === normalizedCondition;
 
+      // Exact match (name + set + condition)
       if (matchesName && matchesSet && matchesCondition) {
-        return {
-          orderNumber: order.orderNumber,
-          buyerName: order.buyerName
-        };
-      }
-
-      // Capture fallback if only condition differs
-      if (!matchesCondition && matchesName && matchesSet && weakCandidate === null) {
-        weakCandidate = {
+        exactMatches.push({
           orderNumber: order.orderNumber,
           buyerName: order.buyerName,
+          quantity: card.quantity || 1
+        });
+      }
+      // Fallback match (name + set, but condition differs)
+      else if (matchesName && matchesSet && !matchesCondition) {
+        fallbackMatches.push({
+          orderNumber: order.orderNumber,
+          buyerName: order.buyerName,
+          quantity: card.quantity || 1,
           pdfCondition: normalizeCondition(card.condition),
           csvCondition: normalizedCondition
-        };
+        });
       }
-
-      // Capture collector-number-based fallback when collector matches; prefer if name OR set matches
-      const pdfCollector = normalizeCollector(card.collectorNumber);
-      if (!collectorCandidate && normalizedCollector && pdfCollector && normalizedCollector === pdfCollector && (matchesSet || matchesName)) {
-        collectorCandidate = {
-          orderNumber: order.orderNumber,
-          buyerName: order.buyerName
-        };
+      // Collector number match
+      else {
+        const pdfCollector = normalizeCollector(card.collectorNumber);
+        if (normalizedCollector && pdfCollector && normalizedCollector === pdfCollector && (matchesSet || matchesName)) {
+          collectorMatches.push({
+            orderNumber: order.orderNumber,
+            buyerName: order.buyerName,
+            quantity: card.quantity || 1
+          });
+        }
       }
     }
   }
 
-  if (weakCandidate) {
-    Logger.log('  INFO: Using fallback match (condition differs): PDF=' + weakCandidate.pdfCondition + ', CSV=' + weakCandidate.csvCondition);
-    return { orderNumber: weakCandidate.orderNumber, buyerName: weakCandidate.buyerName };
+  // Return exact matches if found
+  if (exactMatches.length > 0) {
+    if (exactMatches.length > 1) {
+      Logger.log('  INFO: Found ' + exactMatches.length + ' exact matches in different orders');
+    }
+    return exactMatches;
   }
 
-  if (collectorCandidate) {
-    Logger.log('  INFO: Using collector# fallback');
-    return { orderNumber: collectorCandidate.orderNumber, buyerName: collectorCandidate.buyerName };
+  // Return fallback matches if no exact matches
+  if (fallbackMatches.length > 0) {
+    Logger.log('  INFO: Using fallback match (condition differs): PDF=' + fallbackMatches[0].pdfCondition + ', CSV=' + fallbackMatches[0].csvCondition);
+    return fallbackMatches;
   }
 
-  return null;
+  // Return collector matches if no other matches
+  if (collectorMatches.length > 0) {
+    Logger.log('  INFO: Using collector# fallback (' + collectorMatches.length + ' matches)');
+    return collectorMatches;
+  }
+
+  return [];
 }
 
 /**
@@ -1393,6 +1975,9 @@ function fillOrderInfo(botId, sqNumber, parsedOrders) {
     let orderNumber = '';
     let buyerName = '';
 
+    // Track rows to insert (for multiple-order matches)
+    const rowsToInsert = [];
+
     // Start from row 3 (rows 1-2 are headers, data starts at row 3)
     for (let i = 2; i < data.length; i++) {
       const row = data[i];
@@ -1401,33 +1986,98 @@ function fillOrderInfo(botId, sqNumber, parsedOrders) {
       const condition = row[QUEUE_CONFIG.HELPER_COLS.CONDITION];
       const collectorNum = row[QUEUE_CONFIG.HELPER_COLS.COLLECTOR_NUM];
       const rowSQ = row[QUEUE_CONFIG.HELPER_COLS.SQ_NUMBER];
+      const rowQty = row[QUEUE_CONFIG.HELPER_COLS.QTY] || 1;
 
       // Only process rows for this SQ
       if (rowSQ !== sqNumber) continue;
       if (!cardName) continue; // Skip empty rows
 
-      Logger.log('Row ' + (i + 1) + ': Looking for match - ' + cardName + ' | ' + setName + ' | ' + condition);
+      Logger.log('Row ' + (i + 1) + ': Looking for match - ' + cardName + ' | ' + setName + ' | ' + condition + ' | Qty: ' + rowQty);
 
-      // Use sophisticated multi-level matching
-      const matchedOrder = findMatchingOrder(cardName, setName, condition, collectorNum, parsedOrders);
+      // Use sophisticated multi-level matching - NOW RETURNS ARRAY
+      const matchedOrders = findAllMatchingOrders(cardName, setName, condition, collectorNum, parsedOrders);
 
-      if (matchedOrder) {
-        // Match found! Fill in Order Number and Buyer Name
-        // getRange uses 1-based column numbers: H=8, I=9
-        helperSheet.getRange(i + 1, 8).setValue(matchedOrder.orderNumber); // Column H
-        helperSheet.getRange(i + 1, 9).setValue(matchedOrder.buyerName); // Column I
-        SpreadsheetApp.flush();
+      if (matchedOrders.length > 0) {
+        Logger.log('  ✓ Found ' + matchedOrders.length + ' matching order(s)');
 
-        Logger.log('  ✓ Matched! Order: ' + matchedOrder.orderNumber + ', Buyer: ' + matchedOrder.buyerName);
+        // Check if all matches are from the SAME order (same orderNumber + buyerName)
+        const uniqueOrders = [];
+        for (const order of matchedOrders) {
+          const existingOrder = uniqueOrders.find(o =>
+            o.orderNumber === order.orderNumber && o.buyerName === order.buyerName
+          );
+
+          if (existingOrder) {
+            // Same order - add to quantity
+            existingOrder.quantity += order.quantity;
+          } else {
+            // New unique order
+            uniqueOrders.push({
+              orderNumber: order.orderNumber,
+              buyerName: order.buyerName,
+              quantity: order.quantity
+            });
+          }
+        }
+
+        Logger.log('  → Consolidated to ' + uniqueOrders.length + ' unique order(s) (same card may appear multiple times in PDF)');
+
+        // Fill first match in existing row
+        helperSheet.getRange(i + 1, 8).setValue(uniqueOrders[0].orderNumber); // Column H
+        helperSheet.getRange(i + 1, 9).setValue(uniqueOrders[0].buyerName); // Column I
+        // Set quantity to total quantity for this order
+        helperSheet.getRange(i + 1, 17).setValue(uniqueOrders[0].quantity); // Column Q (qty)
         matchCount++;
 
         // Save order/buyer info to return
-        orderNumber = matchedOrder.orderNumber;
-        buyerName = matchedOrder.buyerName;
+        orderNumber = uniqueOrders[0].orderNumber;
+        buyerName = uniqueOrders[0].buyerName;
+
+        Logger.log('    Order 1: ' + uniqueOrders[0].orderNumber + ' (' + uniqueOrders[0].buyerName + ') - Total Qty: ' + uniqueOrders[0].quantity);
+
+        // If multiple DIFFERENT orders (different buyers), insert additional rows
+        if (uniqueOrders.length > 1) {
+          Logger.log('  ⚠️ Multiple different orders found! Need to insert ' + (uniqueOrders.length - 1) + ' additional row(s)');
+
+          for (let j = 1; j < uniqueOrders.length; j++) {
+            const additionalOrder = uniqueOrders[j];
+            Logger.log('    Order ' + (j + 1) + ': ' + additionalOrder.orderNumber + ' (' + additionalOrder.buyerName + ') - Total Qty: ' + additionalOrder.quantity);
+
+            // Copy the entire row
+            const newRow = row.slice(); // Clone array
+            // Update with new order/buyer/qty
+            newRow[QUEUE_CONFIG.HELPER_COLS.ORDER_NUMBER] = additionalOrder.orderNumber;
+            newRow[QUEUE_CONFIG.HELPER_COLS.BUYER_NAME] = additionalOrder.buyerName;
+            newRow[QUEUE_CONFIG.HELPER_COLS.QTY] = additionalOrder.quantity;
+
+            // Track row to insert after current row
+            rowsToInsert.push({
+              afterRow: i + 1, // Insert after this row (1-based sheet row number)
+              data: newRow
+            });
+
+            matchCount++;
+          }
+        }
       } else {
         Logger.log('  ✗ No match found for: ' + cardName);
       }
     }
+
+    // Insert additional rows (work backwards to maintain row indices)
+    if (rowsToInsert.length > 0) {
+      Logger.log('Inserting ' + rowsToInsert.length + ' additional rows for multiple-order matches');
+      rowsToInsert.sort((a, b) => b.afterRow - a.afterRow); // Sort descending
+
+      for (const insert of rowsToInsert) {
+        helperSheet.insertRowAfter(insert.afterRow);
+        const newRowNum = insert.afterRow + 1;
+        // Write all columns (A through Q)
+        helperSheet.getRange(newRowNum, 1, 1, insert.data.length).setValues([insert.data]);
+      }
+    }
+
+    SpreadsheetApp.flush();
 
     Logger.log('Matched ' + matchCount + ' items');
 
@@ -1560,41 +2210,6 @@ function syncCompletionToConvex(botId, sqNumber) {
   }
 }
 
-/**
- * Reset session timestamp to keep session alive during active use
- * Call this from any bot action (pull, parse, upload)
- */
-function touchBotSession(botId) {
-  const lock = acquireLock(QUEUE_CONFIG.MAX_LOCK_WAIT_MS);
-  if (!lock) {
-    return;
-  }
-
-  try {
-    const ss = SpreadsheetApp.openById(QUEUE_CONFIG.DISCREP_LOG_ID);
-    const queueSheet = ss.getSheetByName(QUEUE_CONFIG.DISCREP_QUEUE_SHEET_NAME);
-
-    if (!queueSheet) return;
-
-    const data = queueSheet.getDataRange().getValues();
-    const timestamp = new Date();
-
-    // Find and update session timestamp
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-      if (row[0] === botId && row[2] === 'SESSION') {
-        queueSheet.getRange(i + 1, 4).setValue(timestamp);
-        SpreadsheetApp.flush();
-        Logger.log('[' + botId + '] Session timestamp refreshed');
-        return;
-      }
-    }
-  } catch (e) {
-    Logger.log('ERROR in touchBotSession: ' + e);
-  } finally {
-    lock.releaseLock();
-  }
-}
 
 /**
  * Acquire exclusive session lock for a bot via Convex
@@ -1602,6 +2217,7 @@ function touchBotSession(botId) {
  */
 function acquireBotSession(botId) {
   try {
+    const startTime = new Date().getTime();
     const url = QUEUE_CONFIG.CONVEX_URL + '/bot-manager/acquire-session';
     const payload = JSON.stringify({ botId });
 
@@ -1609,10 +2225,14 @@ function acquireBotSession(botId) {
       method: 'post',
       contentType: 'application/json',
       payload: payload,
-      muteHttpExceptions: true
+      muteHttpExceptions: true,
+      timeout: 10 // 10 second timeout for HTTP request
     };
 
     const response = UrlFetchApp.fetch(url, options);
+    const elapsed = new Date().getTime() - startTime;
+    Logger.log('[' + botId + '] Session acquisition took ' + elapsed + 'ms');
+
     const result = JSON.parse(response.getContentText());
 
     if (result.success) {

@@ -379,6 +379,28 @@ http.route({
   }),
 });
 
+// Get list of currently claimed SQ numbers (for preventing duplicate attempts)
+http.route({
+  path: "/bot-manager/get-claimed-sqs",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const claimedSQs = await ctx.runQuery(internal.queue.getClaimedSQs, {});
+
+      return new Response(
+        JSON.stringify({ success: true, claimedSQs }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    } catch (error: any) {
+      console.error("Error getting claimed SQs:", error);
+      return new Response(
+        JSON.stringify({ success: false, message: error.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }),
+});
+
 async function validateRequest(req: Request): Promise<WebhookEvent | null> {
   const payloadString = await req.text();
   const svixHeaders = {

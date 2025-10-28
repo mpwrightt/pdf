@@ -2,20 +2,22 @@
 
 ## System Overview
 
-This is a **TCGplayer Discrepancy Refund Processing System** that automates processing of shipping discrepancies (SQs) using multiple concurrent bots. The system consists of:
+This is a **TCGplayer Discrepancy Refund Processing System** that automates processing of shipping discrepancies (SQs) using batch processing. The system consists of:
 
-1. **Google Apps Script Web App** - Queue manager and bot coordinator
-2. **Bot Manager UI** - Web interface for bot operators
+1. **Google Apps Script Web App** - Queue manager and batch processor
+2. **Bot Manager UI** - Web interface for batch SQ processing (20 at a time)
 3. **Convex Backend** - Real-time atomic queue coordination
 4. **Vercel PDF Parser** - Serverless API for extracting order data from PDFs
-5. **Google Sheets** - Discrepancy Log, Refund Log, and Helper Docs
+5. **Google Sheets** - Discrepancy Log, Refund Log, and Helper Doc (single bot)
 
 ## Architecture
 
 ```
 ┌─────────────────┐      HTTP POST      ┌──────────────────────┐
 │  Bot Manager UI │ ───────────────────> │  Apps Script Web App │
-│  (HTML/JS)      │                      │  (Queue Manager)     │
+│  (Batch Mode)   │                      │  (Batch Processor)   │
+│  - 20 SQs batch │                      │  - Claim 20 SQs      │
+│  - 1 at a time  │                      │  - Process iterative │
 └─────────────────┘                      └──────────────────────┘
                                                    │
                                                    │ Reads/Writes
@@ -23,9 +25,9 @@ This is a **TCGplayer Discrepancy Refund Processing System** that automates proc
                      │                             │                         │
                      ▼                             ▼                         ▼
          ┌─────────────────────┐      ┌─────────────────────┐   ┌─────────────────────┐
-         │ Discrepancy Log     │      │ Helper Docs (x5)    │   │ Refund Log          │
-         │ - SQ data           │      │ - BOT1, BOT2, BOT3  │   │ - Final output      │
-         │ - Queue tracking    │      │ - BOT4, BOT5        │   │                     │
+         │ Discrepancy Log     │      │ Helper Doc (1)      │   │ Refund Log          │
+         │ - SQ data           │      │ - BATCH_BOT         │   │ - Final output      │
+         │ - Queue tracking    │      │ - 20 SQs at once    │   │ - Batch uploads     │
          └─────────────────────┘      └─────────────────────┘   └─────────────────────┘
                                                    │
                                                    │ Formulas pull from
@@ -40,6 +42,7 @@ This is a **TCGplayer Discrepancy Refund Processing System** that automates proc
          │  ┌────────────────┐         ┌──────────────────┐    │
          │  │ Convex Backend │ <────── │ Apps Script      │    │
          │  │ (.convex.site) │         │ tryReserveSQ()   │    │
+         │  │                │         │ (20x per batch)  │    │
          │  └────────────────┘         └──────────────────┘    │
          └──────────────────────────────────────────────────────┘
 
@@ -314,48 +317,71 @@ UI then replaces `currentSQ` with this array and filters for missing fields.
 
 **Location**: `QueueManagerService_WebApp.gs:1177`
 
-## Daily Workflow
+## Daily Workflow (Batch Mode)
 
+### Step 1: Claim Batch (20 SQs at once)
 1. **User Opens Bot Manager UI**
    - URL: Apps Script Web App URL
-   - Auto-cleans stale sessions (> 10 min old)
-   - Shows bot availability status
+   - Single-bot batch processing interface
 
-2. **Select Bot**
-   - User clicks BOT1-BOT5 button
-   - System acquires session lock (10-min timeout)
-   - UI starts 2-min heartbeat interval
+2. **Claim Next 20 SQs**
+   - User clicks "Claim Next 20 SQs" button
+   - Calls `pullNextBatchOfSQs('BATCH_BOT', 20)`
+   - System claims 20 SQs atomically via Convex (loops tryReserveSQ 20 times)
+   - Writes ALL 20 SQs to Helper Doc **grouped by SQ number**
+   - Helper Doc layout:
+     ```
+     Row 3-5:   SQ 251019-200rpb (3 cards)
+     Row 6-8:   SQ 251019-201abc (3 cards)
+     Row 9-15:  SQ 251019-202xyz (7 cards)
+     ... (17 more SQs)
+     ```
+   - Returns array of SQ objects with metadata: `[{sqNumber, sqLink, rowCount, rows}, ...]`
+   - UI stores batch in sessionStorage (survives page refresh)
 
-3. **Pull & Claim SQ**
-   - Calls `pullNextSQ(botId)`
-   - Convex atomic reservation prevents race conditions
-   - Writes to Helper Doc, reads back with order/buyer data
+### Step 2: Process Each SQ (1 at a time)
+3. **Navigate Through SQs**
+   - UI shows: "Processing SQ 1 of 20"
+   - Displays current SQ's card data (first row preview)
    - Auto-opens SQ link in new tab
-   - Shows missing fields if order/buyer not auto-filled
+   - Shows "Next SQ" button (disabled until current SQ complete)
 
-4. **Upload PDF (Optional)**
+4. **Upload PDF for Current SQ (Optional)**
    - User uploads SQ details PDF
    - Vercel API parses PDF
-   - `fillOrderInfo()` matches cards and fills Helper Doc
+   - `processPDFUpload()` matches cards and fills Helper Doc
    - Returns `updatedItems` array with per-row data
-   - UI shows manual entry form for any rows still missing data
+   - UI updates current SQ's rows in memory
+   - UI shows manual entry form for any rows still missing Order/Buyer
 
 5. **Manual Entry (If Needed)**
-   - Shows form for ONLY rows with missing order/buyer
+   - Shows form for ONLY current SQ's rows with missing order/buyer
    - User enters data per row
    - Calls `syncAllItemsToHelper()` to update Helper Doc
+   - UI enables "Next SQ" button when all fields complete
 
-6. **Upload to Refund Log**
-   - Calls `uploadToRefundLog(botId, sqNumber)`
-   - Reads ALL rows from Helper Doc
-   - Writes to Refund Log in batch
+6. **Next SQ**
+   - User clicks "Next SQ" button
+   - Increments to next SQ in batch
+   - Auto-opens next SQ link
+   - Repeats steps 3-6 until all 20 SQs processed
+
+### Step 3: Upload Batch (All 20 SQs at once)
+7. **Upload All to Refund Log**
+   - After processing all 20 SQs, UI shows upload screen
+   - Displays summary: "Upload 150 rows from 20 SQs"
+   - User clicks "Upload All to Refund Log"
+   - Calls `uploadBatchToRefundLog('BATCH_BOT', [all 20 sqNumbers])`
+   - Reads ALL rows from Helper Doc (for all 20 SQs)
+   - Writes to Refund Log in single batch (150+ rows at once)
+   - Releases all 20 SQs from Convex queue
    - Clears Helper Doc
-   - Resets UI for next SQ
+   - Resets UI for next batch
 
-7. **Release Bot**
-   - User clicks "Back"
-   - Session released
-   - Bot becomes available for others
+8. **Start New Batch**
+   - User clicks "Start New Batch"
+   - Returns to Step 1
+   - Ready to claim next 20 SQs
 
 ## Configuration
 
@@ -367,13 +393,11 @@ DISCREP_LOG_ID: '1m0dSOA2VogToEpAo6Jj7FEEsfJbWi1W48xiyTHkBNyY'
 REFUND_LOG_ID: '1raaUEsPoMl5dEZwilnHtBwdR0wOV2JRqYzdlVYMdohI'
 
 HELPER_DOCS: {
-  'BOT1': '1VcpaoXllWGTB3APt9Gjhi4-D_1XUH4qldWiZYQlYoH0',
-  'BOT2': '1dsEzEIm2GXtAPbqBYtwFYDFnE0PbgaaoAUAOXghIyeI',
-  'BOT3': '1RZm3lPGjRxiPqnLSpL0PFOhFGWcCL6zjQ1V8UjUUB4I',
-  'BOT4': 'REPLACE_WITH_BOT4_SHEET_ID',  // TODO: Create and replace
-  'BOT5': 'REPLACE_WITH_BOT5_SHEET_ID'   // TODO: Create and replace
+  'BATCH_BOT': '1VcpaoXllWGTB3APt9Gjhi4-D_1XUH4qldWiZYQlYoH0'  // Use BOT1's Helper Doc for batch processing
 }
 ```
+
+**Note**: System now uses single Helper Doc for batch processing (BATCH_BOT). The old BOT1-5 Helper Docs are no longer needed.
 
 ### Environment Variables
 
