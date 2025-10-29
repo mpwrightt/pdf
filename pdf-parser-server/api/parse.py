@@ -219,11 +219,12 @@ class handler(BaseHTTPRequestHandler):
         slot_card_no_collector = r'^(.+?)\s+-\s+([A-Za-z\-\']+)\s+-\s+(.+)$'
         collector_rarity_cond = r'^#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+)$'
         
-        # Pattern 0c: Card with collector (no #) ending with "-"
-        # Format: "CardName - Collector -"
+        # Pattern 0c: Card ending with "-" (collector on third line)
+        # Format: "CardName (with or without collector) -"
         #   Next: "Quantity Game - Set Name"
         #   Third: "#Collector - Rarity - Condition"
-        slot_card_collector_no_hash = r'^(.+?)\s+-\s+([A-Za-z0-9/\-\s]+?)\s+-\s*$'
+        # Example: "Squirtle - 007/165 (Reverse Cosmos Holo) (Costco Exclusive) -"
+        slot_card_collector_no_hash = r'^(.+)\s+-\s*$'
         
         i = 0
         while i < len(cleaned_lines):
