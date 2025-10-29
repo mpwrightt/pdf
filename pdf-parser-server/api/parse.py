@@ -56,11 +56,23 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             
             # Aggregate debug info
-            total_debug = {'pattern_0b_attempts': 0, 'pattern_0b_matches': 0, 'pattern_0c_attempts': 0, 'pattern_0c_matches': 0}
+            total_debug = {
+                'pattern_0b_attempts': 0, 
+                'pattern_0b_matches': 0,
+                'pattern_0b_digit_fails': 0,
+                'pattern_0b_collector_fails': 0,
+                'pattern_0c_attempts': 0, 
+                'pattern_0c_matches': 0,
+                'theoden_found': False,
+                'squirtle_found': False
+            }
             for order in orders:
                 if 'debug' in order:
-                    for key in total_debug:
+                    for key in ['pattern_0b_attempts', 'pattern_0b_matches', 'pattern_0b_digit_fails', 
+                               'pattern_0b_collector_fails', 'pattern_0c_attempts', 'pattern_0c_matches']:
                         total_debug[key] += order['debug'].get(key, 0)
+                    total_debug['theoden_found'] = total_debug['theoden_found'] or order['debug'].get('theoden_found', False)
+                    total_debug['squirtle_found'] = total_debug['squirtle_found'] or order['debug'].get('squirtle_found', False)
             
             response = {
                 'success': True,
@@ -236,7 +248,16 @@ class handler(BaseHTTPRequestHandler):
         slot_card_collector_no_hash = r'^(.+)\s+-\s*$'
         
         i = 0
-        debug_info = {'pattern_0b_attempts': 0, 'pattern_0b_matches': 0, 'pattern_0c_attempts': 0, 'pattern_0c_matches': 0}
+        debug_info = {
+            'pattern_0b_attempts': 0, 
+            'pattern_0b_matches': 0, 
+            'pattern_0b_digit_fails': 0,
+            'pattern_0b_collector_fails': 0,
+            'pattern_0c_attempts': 0, 
+            'pattern_0c_matches': 0,
+            'theoden_found': False,
+            'squirtle_found': False
+        }
         
         while i < len(cleaned_lines):
             line = cleaned_lines[i].strip()
@@ -257,6 +278,8 @@ class handler(BaseHTTPRequestHandler):
                         if match_collector:
                             debug_info['pattern_0b_matches'] += 1
                             card_name = match_0b.group(1).strip()
+                            if 'theoden' in card_name.lower():
+                                debug_info['theoden_found'] = True
                             game = match_0b.group(2).strip()
                             set_name_part1 = match_0b.group(3).strip()
                             
@@ -292,6 +315,10 @@ class handler(BaseHTTPRequestHandler):
                             
                             i += 3
                             continue
+                        else:
+                            debug_info['pattern_0b_collector_fails'] += 1
+                    else:
+                        debug_info['pattern_0b_digit_fails'] += 1
             
             # Try Pattern 0c SECOND (Squirtle case - ends with "-")
             debug_info['pattern_0c_attempts'] += 1
@@ -305,6 +332,8 @@ class handler(BaseHTTPRequestHandler):
                 if match_qty and match_collector:
                     debug_info['pattern_0c_matches'] += 1
                     card_name = match_0c.group(1).strip()
+                    if 'squirtle' in card_name.lower():
+                        debug_info['squirtle_found'] = True
                     collector_num = match_collector.group(1).strip()
                     rarity = match_collector.group(2).strip()
                     condition = match_collector.group(3).strip()
