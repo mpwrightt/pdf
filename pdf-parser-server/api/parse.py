@@ -230,7 +230,88 @@ class handler(BaseHTTPRequestHandler):
         while i < len(cleaned_lines):
             line = cleaned_lines[i].strip()
             
-            # Try Pattern 0 first (full format)
+            # Try Pattern 0b FIRST (most specific - Theoden case)
+            # Must check before Pattern 0 to prevent false matches
+            match_0b = re.match(slot_card_no_collector, line)
+            if match_0b and i + 2 < len(cleaned_lines):
+                next_line = cleaned_lines[i + 1].strip()
+                third_line = cleaned_lines[i + 2].strip()
+                
+                # Check if next line is just a number and third line has #collector
+                if next_line.isdigit():
+                    match_collector = re.match(collector_rarity_cond, third_line)
+                    if match_collector:
+                        card_name = match_0b.group(1).strip()
+                        game = match_0b.group(2).strip()
+                        set_name_part1 = match_0b.group(3).strip()
+                        
+                        quantity = int(next_line)
+                        collector_num = match_collector.group(1).strip()
+                        rarity = match_collector.group(2).strip()
+                        condition_and_set = match_collector.group(3).strip()
+                        
+                        # Parse condition and set continuation
+                        parts = condition_and_set.split(None, 2)
+                        if len(parts) >= 2:
+                            if len(parts) == 3 and ('of' in parts[2] or len(parts[2]) > 10):
+                                condition = f"{parts[0]} {parts[1]}".strip()
+                                set_name = f"{set_name_part1} {parts[2]}".strip()
+                            else:
+                                condition = condition_and_set
+                                set_name = set_name_part1
+                        else:
+                            condition = condition_and_set
+                            set_name = set_name_part1
+                        
+                        card_key = f"{card_name}|{collector_num}|{condition}"
+                        if card_key not in seen_cards:
+                            seen_cards.add(card_key)
+                            cards.append({
+                                'name': card_name,
+                                'quantity': quantity,
+                                'condition': condition,
+                                'setName': set_name,
+                                'collectorNumber': collector_num,
+                                'rarity': rarity
+                            })
+                        
+                        i += 3
+                        continue
+            
+            # Try Pattern 0c SECOND (Squirtle case - ends with "-")
+            match_0c = re.match(slot_card_collector_no_hash, line)
+            if match_0c and i + 2 < len(cleaned_lines):
+                next_line = cleaned_lines[i + 1].strip()
+                third_line = cleaned_lines[i + 2].strip()
+                match_qty = re.match(qty_game_set_pattern, next_line)
+                match_collector = re.match(collector_rarity_cond, third_line)
+                
+                if match_qty and match_collector:
+                    card_name = match_0c.group(1).strip()
+                    collector_num = match_collector.group(1).strip()
+                    rarity = match_collector.group(2).strip()
+                    condition = match_collector.group(3).strip()
+                    
+                    quantity = int(match_qty.group(1))
+                    game = match_qty.group(2).strip()
+                    set_name = match_qty.group(3).strip()
+                    
+                    card_key = f"{card_name}|{collector_num}|{condition}"
+                    if card_key not in seen_cards:
+                        seen_cards.add(card_key)
+                        cards.append({
+                            'name': card_name,
+                            'quantity': quantity,
+                            'condition': condition,
+                            'setName': set_name,
+                            'collectorNumber': collector_num,
+                            'rarity': rarity
+                        })
+                    
+                    i += 3
+                    continue
+            
+            # Try Pattern 0 third (full format)
             match_card = re.match(slot_card_pattern, line)
             
             if match_card and i + 1 < len(cleaned_lines):
@@ -281,88 +362,6 @@ class handler(BaseHTTPRequestHandler):
                     collector_num = match_0a.group(2).strip()
                     rarity = match_0a.group(3).strip()
                     condition = third_line  # Condition on third line
-                    
-                    quantity = int(match_qty.group(1))
-                    game = match_qty.group(2).strip()
-                    set_name = match_qty.group(3).strip()
-                    
-                    card_key = f"{card_name}|{collector_num}|{condition}"
-                    if card_key not in seen_cards:
-                        seen_cards.add(card_key)
-                        cards.append({
-                            'name': card_name,
-                            'quantity': quantity,
-                            'condition': condition,
-                            'setName': set_name,
-                            'collectorNumber': collector_num,
-                            'rarity': rarity
-                        })
-                    
-                    i += 3
-                    continue
-            
-            # Try Pattern 0b: No collector on first line (Theoden case)
-            match_0b = re.match(slot_card_no_collector, line)
-            if match_0b and i + 2 < len(cleaned_lines):
-                next_line = cleaned_lines[i + 1].strip()
-                third_line = cleaned_lines[i + 2].strip()
-                
-                # Check if next line is just a number and third line has #collector
-                if next_line.isdigit():
-                    match_collector = re.match(collector_rarity_cond, third_line)
-                    if match_collector:
-                        card_name = match_0b.group(1).strip()
-                        game = match_0b.group(2).strip()
-                        set_name_part1 = match_0b.group(3).strip()
-                        
-                        quantity = int(next_line)
-                        collector_num = match_collector.group(1).strip()
-                        rarity = match_collector.group(2).strip()
-                        condition_and_set = match_collector.group(3).strip()
-                        
-                        # Parse condition and set continuation
-                        # Format: "Lightly Played Foil of Middle-earth"
-                        parts = condition_and_set.split(None, 2)  # Split on whitespace, max 3 parts
-                        if len(parts) >= 2:
-                            # Check if last part looks like set continuation
-                            if len(parts) == 3 and ('of' in parts[2] or len(parts[2]) > 10):
-                                condition = f"{parts[0]} {parts[1]}".strip()
-                                set_name = f"{set_name_part1} {parts[2]}".strip()
-                            else:
-                                condition = condition_and_set
-                                set_name = set_name_part1
-                        else:
-                            condition = condition_and_set
-                            set_name = set_name_part1
-                        
-                        card_key = f"{card_name}|{collector_num}|{condition}"
-                        if card_key not in seen_cards:
-                            seen_cards.add(card_key)
-                            cards.append({
-                                'name': card_name,
-                                'quantity': quantity,
-                                'condition': condition,
-                                'setName': set_name,
-                                'collectorNumber': collector_num,
-                                'rarity': rarity
-                            })
-                        
-                        i += 3
-                        continue
-            
-            # Try Pattern 0c: Collector without # prefix, ends with "-" (Squirtle case)
-            match_0c = re.match(slot_card_collector_no_hash, line)
-            if match_0c and i + 2 < len(cleaned_lines):
-                next_line = cleaned_lines[i + 1].strip()
-                third_line = cleaned_lines[i + 2].strip()
-                match_qty = re.match(qty_game_set_pattern, next_line)
-                match_collector = re.match(collector_rarity_cond, third_line)
-                
-                if match_qty and match_collector:
-                    card_name = match_0c.group(1).strip()
-                    collector_num = match_collector.group(1).strip()  # Use #collector from third line
-                    rarity = match_collector.group(2).strip()
-                    condition = match_collector.group(3).strip()
                     
                     quantity = int(match_qty.group(1))
                     game = match_qty.group(2).strip()
