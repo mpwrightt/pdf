@@ -2734,47 +2734,43 @@ function normalizeCollector(num) {
 
 /**
  * Normalize condition to standard abbreviation
- * IMPORTANT: Preserves foil designation (NMF, LPF, etc.) to prevent false matches
+ * IMPORTANT: Strips all suffix variations (Foil, Holofoil, 1st Edition, etc.) for matching
+ * 
+ * PDF formats: "Near Mint", "Near Mint Holofoil", "Moderately Played Holofoil"
+ * Log formats: NM, NMF, NMH, LPF, MPH, NM1, MPU, etc.
+ * 
+ * Strategy: Extract base condition (NM/LP/MP/HP) and ignore all suffixes
  */
 function normalizeCondition(condition) {
-  const cond = (condition || '').toLowerCase().trim();
+  let cond = (condition || '').toLowerCase().trim();
+  
+  // Remove trailing suffix words (case-insensitive)
+  // Handles: "Near Mint Holofoil" → "Near Mint", "Lightly Played Foil" → "Lightly Played"
+  // Also handles: "Near Mint Reverse Holofoil", "Moderately Played Unlimited"
+  cond = cond
+    .replace(/\s*(reverse holofoil|reverse holo|holofoil|holo foil|foil|1st edition|unlimited|limited)\s*$/gi, '')
+    .trim();
+  
+  // Strip single-letter suffixes from abbreviated codes
+  // Handles: "NMF" → "NM", "LPH" → "LP", "MPU" → "MP", "NM1" → "NM"
+  cond = cond.replace(/[fhul1]$/, '').trim();
 
-  // IMPORTANT: Check for foil designation FIRST before normalizing base condition
-  // This prevents NMF from being normalized to just "nm"
-  const isFoil = cond.includes('foil') || cond.endsWith('f');
+  // Fast-path abbreviated codes - normalize to base condition
+  if (cond === 'nm' || cond.startsWith('nm')) return 'nm';
+  if (cond === 'lp' || cond.startsWith('lp')) return 'lp';
+  if (cond === 'mp' || cond.startsWith('mp')) return 'mp';
+  if (cond === 'hp' || cond.startsWith('hp')) return 'hp';
+  if (cond === 'dmg' || cond.startsWith('dmg') || cond.startsWith('damaged')) return 'damaged';
 
-  // Fast-path codes with foil preservation
-  if (cond.startsWith('nm')) {
-    return isFoil ? 'nmf' : 'nm';
-  }
-  if (cond.startsWith('lp')) {
-    return isFoil ? 'lpf' : 'lp';
-  }
-  if (cond.startsWith('mp')) {
-    return isFoil ? 'mpf' : 'mp';
-  }
-  if (cond.startsWith('hp')) {
-    return isFoil ? 'hpf' : 'hp';
-  }
+  // Map verbose text formats to standard abbreviations
+  if (cond.includes('near mint')) return 'nm';
+  if (cond.includes('lightly played') || cond === 'light') return 'lp';
+  if (cond.includes('moderately played') || cond === 'moderate') return 'mp';
+  if (cond.includes('heavily played') || cond === 'heavy') return 'hp';
+  if (cond.includes('damaged')) return 'damaged';
 
-  // Map various verbose formats to standard abbreviations
-  if (cond.includes('near mint')) {
-    return isFoil ? 'nmf' : 'nm';
-  }
-  if (cond.includes('lightly played') || cond.includes('light')) {
-    return isFoil ? 'lpf' : 'lp';
-  }
-  if (cond.includes('moderately played') || cond.includes('moderate')) {
-    return isFoil ? 'mpf' : 'mp';
-  }
-  if (cond.includes('heavily played') || cond.includes('heavy')) {
-    return isFoil ? 'hpf' : 'hp';
-  }
-  if (cond.includes('damaged') || cond === 'dmg') {
-    return isFoil ? 'damagedf' : 'damaged';
-  }
-
-  return cond; // Return as-is if no match
+  // If no match, return the cleaned base condition
+  return cond;
 }
 
 /**
