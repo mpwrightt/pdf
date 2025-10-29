@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Bot Manager System - Claude Code Guide
 
 ## System Overview
@@ -173,7 +177,8 @@ tryReserveSQ('BOT2', '251019-200rpb')
 **Matching Levels** (in order of preference):
 1. **Exact Match**: Name + Set + Condition all match exactly
 2. **Fallback Match**: Name + Set match, but condition differs (still accepts)
-3. **Collector Number Match**: Collector# matches + (Set OR Name) matches
+
+**IMPORTANT**: Collector number is **NOT** used for matching as of 2025-10-29. Same collector number can exist across different sets, causing false positives. Only match on: Card Name + Set Name + Condition.
 
 **Normalization**:
 - Card Names: Case-insensitive, punctuation-insensitive, parentheticals-stripped
@@ -182,10 +187,54 @@ tryReserveSQ('BOT2', '251019-200rpb')
 - Conditions: NM1/NMH/NMRH → "nm", LP/LPF/LPH → "lp", etc.
 
 **Locations**:
-- `QueueManagerService_WebApp.gs:1261-1418` (normalization functions)
-- `QueueManagerService_WebApp.gs:1349-1419` (findMatchingOrder)
+- `QueueManagerService_WebApp.gs:2677-2760` (normalization functions)
+- `QueueManagerService_WebApp.gs:2766-2835` (findAllMatchingOrders - returns array of all matching orders)
 
-### 5. Multi-Row SQ Handling
+### 5. Script Properties Row Range Caching (Critical Performance Optimization)
+
+**Pattern**: Two-tier caching system to avoid re-scanning entire Helper Doc (10,000+ rows)
+
+**Why**: Reading entire Helper Doc for each operation causes 15-40x slowdown as batch size grows. System went from 3s to 91s for a single operation.
+
+**Implementation**:
+```javascript
+// Tier 1: In-memory cache (instant, per-execution)
+const _rowRangesMemoryCache = {};
+
+// Tier 2: Script Properties (persistent, ~30s first load, then cached in memory)
+function cacheRowRanges(botId, sqRowRanges) {
+  _rowRangesMemoryCache[botId] = sqRowRanges;
+  PropertiesService.getScriptProperties().setProperty(
+    'SQ_ROW_RANGES_' + botId,
+    JSON.stringify(sqRowRanges)
+  );
+}
+
+function getCachedRowRanges(botId) {
+  // Check memory first (instant)
+  if (_rowRangesMemoryCache[botId]) return _rowRangesMemoryCache[botId];
+
+  // Fall back to Script Properties
+  const cached = PropertiesService.getScriptProperties().getProperty('SQ_ROW_RANGES_' + botId);
+  if (cached) {
+    const ranges = JSON.parse(cached);
+    _rowRangesMemoryCache[botId] = ranges;  // Cache in memory for next call
+    return ranges;
+  }
+  return null;
+}
+```
+
+**When to cache**: `getSQList()` builds row ranges when listing SQs
+**When to use**: `loadSingleSQ()`, `uploadToRefundLog()`, `syncManualDataToHelper()`, `processPDFUpload()`
+**When to clear**: `clearRowRangesCache()` after Helper Doc is cleared or rows are inserted/deleted
+
+**Locations**:
+- `QueueManagerService_WebApp.gs:1612-1681` (caching functions)
+- `QueueManagerService_WebApp.gs:1688-1802` (getSQList - builds cache)
+- `QueueManagerService_WebApp.gs:1811-1947` (loadSingleSQ - uses cache)
+
+### 6. Multi-Row SQ Handling
 
 **Pattern**: An SQ can contain multiple cards (1 to 100+ rows)
 
@@ -327,8 +376,11 @@ UI then replaces `currentSQ` with this array and filters for missing fields.
 2. **Claim Next 20 SQs**
    - User clicks "Claim Next 20 SQs" button
    - Calls `pullNextBatchOfSQs('BATCH_BOT', 20)`
-   - System claims 20 SQs atomically via Convex (loops tryReserveSQ 20 times)
+   - Takes 2-4 minutes depending on SQ size (avg 23.5 rows per SQ = ~470 total rows)
+   - System finds first 20 unclaimed SQs from Discrepancy Log
    - Writes ALL 20 SQs to Helper Doc **grouped by SQ number**
+   - No Convex needed (single bot = no race conditions)
+   - Timeout: 5.5 minutes (Apps Script limit: 6 minutes)
    - Helper Doc layout:
      ```
      Row 3-5:   SQ 251019-200rpb (3 cards)
@@ -434,7 +486,86 @@ NEXT_PUBLIC_APPS_SCRIPT_API_KEY=bot-manager-secret-key-change-this-12345
 
 ### PDF Upload Shows All Rows in Manual Entry (Not Just Missing)
 - **Cause**: Server not returning `updatedItems` in `processPDFUpload()` response
-- **Solution**: Add `updatedItems: result.updatedItems || []` to return statement (line 1177)
+- **Solution**: Add `updatedItems: result.updatedItems || []` to return statement
+
+### 6. Performance Degradation as Batch Size Grows
+
+**Problem**: Operations take progressively longer (3s → 91s) as more SQs are added to Helper Doc
+
+**Solution**: Use Script Properties row range caching to avoid re-scanning entire Helper Doc
+
+**Functions affected**:
+- `loadSingleSQ()` - Must use cached row ranges from `getSQList()`
+- `processPDFUpload()` - Must read only target SQ's rows, not entire sheet
+- `uploadToRefundLog()` - Must use cached ranges for targeted reads
+- `syncManualDataToHelper()` - Must use cached ranges
+
+**See**: `PERFORMANCE_FIXES_SUMMARY.md` for details
+
+### 7. Collector Number False Positives
+
+**Problem**: Same collector number exists in different sets, causing duplicate row insertion
+
+**Example**: "Ganax, Astral Hunter" appears twice in PDF (once in SQ list, once under order). Collector number matching created duplicate Helper Doc row.
+
+**Solution**: Removed collector number matching entirely (as of 2025-10-29). Only match on: Card Name + Set Name + Condition
+
+**Location**: `QueueManagerService_WebApp.gs:2766-2835` (findAllMatchingOrders)
+
+## Debugging Patterns
+
+### Apps Script Execution Logs
+
+**Critical for diagnosing issues**. Always check execution logs when investigating problems:
+
+1. Open Apps Script Editor
+2. Click "Executions" icon (📋) in left sidebar
+3. Click on specific execution to see detailed logs
+4. Look for:
+   - `Logger.log()` statements with timing info
+   - Error messages with stack traces
+   - HTTP response codes from external APIs
+
+**Common log patterns**:
+```
+[BATCH_BOT] Fetching Discrepancy Log data (optimized scan)...
+[BATCH_BOT] Found 294 unclaimed SQ(s)
+[BATCH_BOT] Using cached row range for SQ 251019-200rpb: rows 3-27 (25 rows)
+[BATCH_BOT] ✓ Uploaded 25 rows to Refund Log starting at row 1523
+```
+
+### Performance Profiling
+
+**Add timing logs** to identify bottlenecks:
+
+```javascript
+const startTime = new Date().getTime();
+
+// ... operation ...
+
+const elapsed = new Date().getTime() - startTime;
+Logger.log('[' + botId + '] Operation took ' + elapsed + 'ms');
+```
+
+**Expected timings** (after optimizations):
+- `loadSingleSQ()`: 300ms - 3s depending on cache state
+- `processPDFUpload()`: 1-5s depending on PDF complexity
+- `uploadBatchToRefundLog()`: 2-10s depending on batch size
+- `pullNextBatchOfSQs()`: 2-4 minutes for 20 SQs (~470 rows)
+
+### Cache Invalidation Issues
+
+**Symptom**: Old data showing up after updates, or performance suddenly slow again
+
+**Check**:
+1. Is Script Properties cache stale? (cleared when Helper Doc is cleared)
+2. Was cache built before or after Helper Doc modifications?
+3. Did PDF upload insert rows? (row numbers shift, cache invalid)
+
+**Solution**: Call `clearRowRangesCache(botId)` after:
+- Clearing Helper Doc
+- Uploading to Refund Log
+- Any operation that inserts/deletes rows in Helper Doc
 
 ## Testing
 
@@ -487,5 +618,5 @@ For issues or questions:
 
 ---
 
-**Last Updated**: 2025-10-27
-**System Version**: 2.0 (5-bot expansion with activity-based sessions)
+**Last Updated**: 2025-10-29
+**System Version**: 2.1 (Performance optimizations: Script Properties caching, collector number matching removed)

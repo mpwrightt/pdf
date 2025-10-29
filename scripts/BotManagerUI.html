@@ -88,7 +88,16 @@
     <!-- Header -->
     <div class="text-center mb-4">
       <h1 class="text-white mb-2"><i class="bi bi-robot"></i> Batch Bot Manager</h1>
-      <p class="text-white-50">Process 20 SQs at a time - Discrepancy Refund System</p>
+      <p class="text-white-50">Claim and process all unclaimed SQs - Discrepancy Refund System</p>
+      <div class="mb-2">
+        <button class="btn btn-sm btn-outline-light" onclick="clearCacheAndRestart()">
+          <i class="bi bi-arrow-clockwise"></i> Clear Cache & Restart
+        </button>
+        <button class="btn btn-sm btn-outline-light" onclick="showLocalStorageInfo()">
+          <i class="bi bi-info-circle"></i> Show Saved Progress
+        </button>
+      </div>
+      <small id="progressInfo" class="text-white-50"></small>
     </div>
 
     <!-- Loading Indicator -->
@@ -105,10 +114,18 @@
         <h4 class="mb-0"><i class="bi bi-download"></i> Step 1: Claim Next Batch</h4>
       </div>
       <div class="card-body">
-        <p class="text-muted">Claim the next 20 unclaimed SQs from the Discrepancy Log and load them into the Helper Doc</p>
-        <button id="claimBtn" class="btn btn-primary btn-lg w-100" onclick="claimBatch()">
-          <i class="bi bi-cloud-download"></i> Claim Next 20 SQs
+        <p class="text-muted">Claim ALL unclaimed SQs from the Discrepancy Log and load them into the Helper Doc</p>
+        <button id="claimBtn" class="btn btn-primary btn-lg w-100 mb-2" onclick="claimBatch()">
+          <i class="bi bi-cloud-download"></i> Claim All Unclaimed SQs
         </button>
+        <button id="resumeBtn" class="btn btn-outline-primary btn-lg w-100" onclick="resumeFromHelperDoc()">
+          <i class="bi bi-folder-open"></i> Resume from Helper Doc
+        </button>
+        <small class="text-muted d-block mt-2">
+          ⏱️ Claiming may take 2-6 minutes depending on quantity. Apps Script timeout: 6 minutes.<br>
+          💡 Use "Resume" if Helper Doc already has SQs from a previous session.<br>
+          🎯 System will claim as many SQs as possible within timeout limit.
+        </small>
       </div>
     </div>
 
@@ -224,26 +241,39 @@
 
   <script>
     // State variables
-    let batchedSQs = []; // Array of {sqNumber, sqLink, rowCount, rows: [...]}
+    let sqNumbersList = []; // Array of SQ numbers to process (e.g., ["251019-137rmb", ...])
+    let sqRowRanges = {}; // Map of SQ numbers to row ranges {sqNumber: {startRow, endRow}} for fast loading
+    let currentSQData = null; // Currently loaded SQ data {sqNumber, sqLink, rowCount, rows: [...]}
     let currentSQIndex = 0; // Which SQ we're currently processing (0-19)
     let totalSQsInBatch = 0;
     const BOT_ID = 'BATCH_BOT'; // Single bot for batch processing
 
-    // Restore state from sessionStorage on page load (in case of refresh)
+    // Restore state from localStorage on page load (persists across browser sessions)
     window.addEventListener('load', function() {
-      const savedBatch = sessionStorage.getItem('batchedSQs');
-      const savedIndex = sessionStorage.getItem('currentSQIndex');
+      const savedSQList = localStorage.getItem('sqNumbersList');
+      const savedIndex = localStorage.getItem('currentSQIndex');
+      const savedCurrentSQ = localStorage.getItem('currentSQData');
 
-      if (savedBatch && savedIndex) {
-        batchedSQs = JSON.parse(savedBatch);
+      if (savedSQList && savedIndex) {
+        sqNumbersList = JSON.parse(savedSQList);
         currentSQIndex = parseInt(savedIndex);
-        totalSQsInBatch = batchedSQs.length;
+        totalSQsInBatch = sqNumbersList.length;
+
+        if (savedCurrentSQ) {
+          currentSQData = JSON.parse(savedCurrentSQ);
+        }
 
         // Restore UI state
         if (currentSQIndex < totalSQsInBatch) {
           document.getElementById('claimBatchCard').style.display = 'none';
           document.getElementById('processSQCard').style.display = 'block';
-          displayCurrentSQ();
+
+          if (currentSQData) {
+            displayCurrentSQ();
+          } else {
+            // Load current SQ if not in cache
+            loadSingleSQAndDisplay(currentSQIndex);
+          }
         } else {
           // All SQs processed, show upload card
           document.getElementById('claimBatchCard').style.display = 'none';
@@ -253,15 +283,19 @@
       }
     });
 
-    // Save state to sessionStorage
+    // Save state to localStorage (persists across browser sessions)
     function saveState() {
-      sessionStorage.setItem('batchedSQs', JSON.stringify(batchedSQs));
-      sessionStorage.setItem('currentSQIndex', currentSQIndex.toString());
+      localStorage.setItem('sqNumbersList', JSON.stringify(sqNumbersList));
+      localStorage.setItem('currentSQIndex', currentSQIndex.toString());
+      if (currentSQData) {
+        localStorage.setItem('currentSQData', JSON.stringify(currentSQData));
+      }
     }
 
     function clearState() {
-      sessionStorage.removeItem('batchedSQs');
-      sessionStorage.removeItem('currentSQIndex');
+      localStorage.removeItem('sqNumbersList');
+      localStorage.removeItem('currentSQIndex');
+      localStorage.removeItem('currentSQData');
     }
 
     function showLoading(text) {
@@ -274,101 +308,353 @@
     }
 
     function claimBatch() {
-      showLoading('Claiming next 20 SQs... This may take a minute.');
+      showLoading('Claiming all unclaimed SQs... This may take 2-6 minutes depending on quantity. Please wait...');
       document.getElementById('claimBtn').disabled = true;
-
-      // Set 3-minute timeout for batch claim
-      const claimTimeout = setTimeout(function() {
-        hideLoading();
-        document.getElementById('claimBtn').disabled = false;
-        alert('Batch claim timed out after 3 minutes. The server may be slow. Please try again.');
-      }, 180000);
+      document.getElementById('resumeBtn').disabled = true;
 
       google.script.run
         .withSuccessHandler(function(result) {
-          clearTimeout(claimTimeout);
           handleClaimSuccess(result);
         })
         .withFailureHandler(function(error) {
-          clearTimeout(claimTimeout);
           hideLoading();
           alert('Error: ' + error.message);
           document.getElementById('claimBtn').disabled = false;
+          document.getElementById('resumeBtn').disabled = false;
         })
-        .pullNextBatchOfSQs(BOT_ID, 20);
+        .pullNextBatchOfSQs(BOT_ID, 20); // Claim 20 SQs at a time to keep Helper Doc small and fast
     }
 
-    function handleClaimSuccess(result) {
-      hideLoading();
+    function resumeFromHelperDoc() {
+      // Check if there's existing progress in localStorage
+      const savedSQList = localStorage.getItem('sqNumbersList');
+      const savedIndex = localStorage.getItem('currentSQIndex');
 
-      if (!result.success) {
-        alert(result.message || 'Failed to claim batch');
+      console.log('Resume check - savedSQList:', savedSQList);
+      console.log('Resume check - savedIndex:', savedIndex);
+
+      if (savedSQList && savedIndex) {
+        const savedIndex_int = parseInt(savedIndex);
+        const savedSQs = JSON.parse(savedSQList);
+
+        console.log('Found saved progress - Index:', savedIndex_int, 'Total SQs:', savedSQs.length);
+
+        // Only show resume prompt if we haven't finished all SQs yet
+        if (savedIndex_int < savedSQs.length) {
+          // Ask user if they want to resume from where they left off
+          const resumeMsg = `Found existing progress:\n\n` +
+            `You were on SQ ${savedIndex_int + 1} of ${savedSQs.length}\n\n` +
+            `Click OK to resume from SQ ${savedIndex_int + 1}, or Cancel to start over from SQ 1`;
+
+          if (confirm(resumeMsg)) {
+            // Resume from existing progress
+            sqNumbersList = savedSQs;
+            currentSQIndex = savedIndex_int;
+            totalSQsInBatch = savedSQs.length;
+
+            console.log('User chose to resume - Loading SQ', currentSQIndex + 1);
+
+            // Restore UI and load current SQ
+            document.getElementById('claimBatchCard').style.display = 'none';
+            document.getElementById('processSQCard').style.display = 'block';
+            loadSingleSQAndDisplay(currentSQIndex);
+            return;
+          } else {
+            console.log('User chose to start over - clearing state');
+            // User chose to start over - clear saved progress
+            clearState();
+          }
+        } else {
+          // Already finished all SQs - clear and start fresh
+          console.log('All SQs already processed - clearing state');
+          clearState();
+        }
+      } else {
+        console.log('No saved progress found');
+      }
+
+      // No saved progress or user chose to start over - load fresh from Helper Doc
+      showLoading('Loading SQ list from Helper Doc...');
+      document.getElementById('claimBtn').disabled = true;
+      document.getElementById('resumeBtn').disabled = true;
+
+      // Step 1: Get list of SQ numbers with completion status
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (!result || !result.success) {
+            hideLoading();
+            alert(result ? result.message : 'Failed to load SQ list');
+            document.getElementById('claimBtn').disabled = false;
+            document.getElementById('resumeBtn').disabled = false;
+            return;
+          }
+
+          // Check if any SQs are already complete
+          if (result.completedCount > 0) {
+            console.log('Found ' + result.completedCount + ' completed SQ(s), ' + result.incompleteCount + ' incomplete');
+
+            // Show status to user
+            const statusMsg = `Found ${result.totalSQs} SQ(s) in Helper Doc:\n\n` +
+              `✓ Completed: ${result.completedCount}\n` +
+              `○ Incomplete: ${result.incompleteCount}\n\n` +
+              `${result.incompleteCount > 0 ?
+                'Starting from first incomplete SQ (' + (result.firstIncompleteIndex + 1) + ' of ' + result.totalSQs + ')' :
+                'All SQs are complete! Ready to upload.'}`;
+
+            alert(statusMsg);
+          }
+
+          // Step 2: Initialize batch and load from first incomplete SQ
+          initializeBatchFromSQList(result.sqNumbers, result.sqRowRanges, result.firstIncompleteIndex || 0);
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          alert('Error: ' + error.message);
+          document.getElementById('claimBtn').disabled = false;
+          document.getElementById('resumeBtn').disabled = false;
+        })
+        .getSQList(BOT_ID);
+    }
+
+    /**
+     * Initialize batch with SQ list, then load first SQ only
+     * Subsequent SQs are loaded on-demand when user clicks "Next SQ"
+     * @param {Array} sqNumbers - Array of SQ numbers
+     * @param {Object} rowRanges - Map of SQ numbers to row ranges {sqNumber: {startRow, endRow}}
+     * @param {Number} startIndex - Index to start from (default 0)
+     */
+    function initializeBatchFromSQList(sqNumbers, rowRanges, startIndex) {
+      console.log('🔍 [AUTO-START DEBUG] initializeBatchFromSQList called');
+      console.log('🔍 [AUTO-START DEBUG] sqNumbers:', sqNumbers);
+      console.log('🔍 [AUTO-START DEBUG] rowRanges:', rowRanges);
+      console.log('🔍 [AUTO-START DEBUG] startIndex:', startIndex);
+
+      if (!sqNumbers || sqNumbers.length === 0) {
+        console.error('❌ [AUTO-START DEBUG] sqNumbers is empty or null');
+        hideLoading();
+        alert('No SQs found in Helper Doc');
         document.getElementById('claimBtn').disabled = false;
+        document.getElementById('resumeBtn').disabled = false;
         return;
       }
 
-      // Store batch data
-      batchedSQs = result.sqBatch;
-      currentSQIndex = 0;
-      totalSQsInBatch = batchedSQs.length;
+      // Handle parameter order: could be (sqNumbers, startIndex) or (sqNumbers, rowRanges, startIndex)
+      if (typeof rowRanges === 'number') {
+        // Called as (sqNumbers, startIndex) - no rowRanges provided
+        startIndex = rowRanges;
+        rowRanges = {};
+      }
 
+      startIndex = startIndex || 0; // Default to 0 if not provided
+
+      console.log('✅ [AUTO-START DEBUG] Initializing batch with ' + sqNumbers.length + ' SQ(s), starting from index ' + startIndex);
+
+      // Store SQ list, row ranges, and set starting index
+      sqNumbersList = sqNumbers;
+      sqRowRanges = rowRanges || {}; // Store row range cache for fast loading
+      currentSQIndex = startIndex;
+      totalSQsInBatch = sqNumbers.length;
+      currentSQData = null;
+
+      console.log('🔍 [AUTO-START DEBUG] Saving state to localStorage...');
       saveState();
 
-      console.log('Claimed batch:', batchedSQs);
+      console.log('🔍 [AUTO-START DEBUG] Calling loadSingleSQAndDisplay(' + startIndex + ')...');
 
-      // Hide claim card, show process card
-      document.getElementById('claimBatchCard').style.display = 'none';
-      document.getElementById('processSQCard').style.display = 'block';
-
-      // Display first SQ
-      displayCurrentSQ();
-
-      alert(`Successfully claimed ${totalSQsInBatch} SQs! (${result.totalRows} total rows)\n\nNow processing SQ 1 of ${totalSQsInBatch}`);
+      // Load SQ at starting index (might be > 0 if resuming from incomplete)
+      loadSingleSQAndDisplay(startIndex);
     }
 
-    function displayCurrentSQ() {
-      if (currentSQIndex >= totalSQsInBatch) {
-        // All SQs processed, move to upload step
+    /**
+     * Load a single SQ by index and display it
+     * Called when: (1) Starting batch, (2) Clicking "Next SQ", (3) Page refresh
+     */
+    function loadSingleSQAndDisplay(index) {
+      console.log('🔍 [AUTO-START DEBUG] loadSingleSQAndDisplay called with index:', index);
+      console.log('🔍 [AUTO-START DEBUG] totalSQsInBatch:', totalSQsInBatch);
+
+      if (index >= totalSQsInBatch) {
+        console.log('⚠️ [AUTO-START DEBUG] index >= totalSQsInBatch - all SQs processed');
+        // All SQs processed
         document.getElementById('processSQCard').style.display = 'none';
         document.getElementById('uploadBatchCard').style.display = 'block';
         updateUploadSummary();
         return;
       }
 
-      const currentSQ = batchedSQs[currentSQIndex];
+      const sqNumber = sqNumbersList[index];
+      const rowRange = sqRowRanges[sqNumber]; // Get cached row range if available
+
+      console.log('🔍 [AUTO-START DEBUG] Loading SQ:', sqNumber);
+      console.log('🔍 [AUTO-START DEBUG] Row range cache:', rowRange);
+
+      showLoading(`Loading SQ ${index + 1} of ${totalSQsInBatch}: ${sqNumber}...`);
+
+      // Pass row range if available (much faster for large Helper Docs!)
+      const scriptCall = google.script.run
+        .withSuccessHandler(function(result) {
+          console.log('🔍 [AUTO-START DEBUG] loadSingleSQ returned:', result);
+          hideLoading();
+
+          if (!result || !result.success) {
+            console.error('❌ [AUTO-START DEBUG] loadSingleSQ failed');
+            alert('Failed to load SQ ' + sqNumber + ': ' + (result ? result.message : 'Unknown error'));
+            document.getElementById('claimBtn').disabled = false;
+            document.getElementById('resumeBtn').disabled = false;
+            return;
+          }
+
+          console.log('✅ [AUTO-START DEBUG] loadSingleSQ success');
+
+          // Store current SQ data
+          currentSQData = result.sqData;
+          saveState();
+
+          console.log('✅ [AUTO-START DEBUG] Loaded SQ ' + (index + 1) + '/' + totalSQsInBatch + ':', sqNumber);
+
+          console.log('🔍 [AUTO-START DEBUG] Hiding claim card, showing process card...');
+          // Hide claim card, show process card
+          document.getElementById('claimBatchCard').style.display = 'none';
+          document.getElementById('processSQCard').style.display = 'block';
+          console.log('✅ [AUTO-START DEBUG] UI cards switched successfully');
+
+          console.log('🔍 [AUTO-START DEBUG] Calling displayCurrentSQ()...');
+          // Display this SQ
+          displayCurrentSQ();
+
+          if (index === 0) {
+            console.log('🔍 [AUTO-START DEBUG] First SQ - showing welcome alert');
+            alert(`Ready to process ${totalSQsInBatch} SQ(s)!\n\nNow processing SQ 1 of ${totalSQsInBatch}`);
+          }
+        })
+        .withFailureHandler(function(error) {
+          console.error('❌ [AUTO-START DEBUG] loadSingleSQ error:', error);
+          hideLoading();
+          alert('Error loading SQ ' + sqNumber + ': ' + error.message);
+          document.getElementById('claimBtn').disabled = false;
+          document.getElementById('resumeBtn').disabled = false;
+        });
+
+      // Call with or without row range depending on cache availability
+      if (rowRange && rowRange.startRow && rowRange.endRow) {
+        console.log('🔍 [AUTO-START DEBUG] Calling loadSingleSQ with cached row range (' + rowRange.startRow + '-' + rowRange.endRow + ')');
+        scriptCall.loadSingleSQ(BOT_ID, sqNumber, rowRange.startRow, rowRange.endRow);
+      } else {
+        console.log('🔍 [AUTO-START DEBUG] Calling loadSingleSQ without row range (will scan column J)');
+        scriptCall.loadSingleSQ(BOT_ID, sqNumber);
+      }
+    }
+
+    function handleClaimSuccess(result) {
+      hideLoading();
+
+      console.log('🔍 [AUTO-START DEBUG] handleClaimSuccess called');
+      console.log('🔍 [AUTO-START DEBUG] result:', result);
+
+      // Check if result is null or undefined
+      if (!result) {
+        console.error('❌ [AUTO-START DEBUG] Result is null or undefined');
+        alert('Error: Server returned no data. This usually means the function timed out or crashed. Check Apps Script execution logs.');
+        document.getElementById('claimBtn').disabled = false;
+        document.getElementById('resumeBtn').disabled = false;
+        return;
+      }
+
+      console.log('🔍 [AUTO-START DEBUG] result.success:', result.success);
+      console.log('🔍 [AUTO-START DEBUG] result.useResume:', result.useResume);
+
+      if (!result.success) {
+        console.error('❌ [AUTO-START DEBUG] result.success is false');
+        alert(result.message || 'Failed to claim batch');
+        document.getElementById('claimBtn').disabled = false;
+        document.getElementById('resumeBtn').disabled = false;
+        return;
+      }
+
+      // NEW: Check if we need to use paginated loading to get full data
+      if (result.useResume) {
+        console.log('✅ [AUTO-START DEBUG] result.useResume is true - starting auto-load');
+        console.log('🔍 [AUTO-START DEBUG] Calling getSQList(' + BOT_ID + ')...');
+        showLoading('Loading SQ list from Helper Doc...');
+
+        // Step 1: Get list of SQ numbers (lightweight)
+        google.script.run
+          .withSuccessHandler(function(listResult) {
+            console.log('🔍 [AUTO-START DEBUG] getSQList returned:', listResult);
+
+            if (!listResult || !listResult.success) {
+              console.error('❌ [AUTO-START DEBUG] getSQList failed or returned unsuccessful result');
+              hideLoading();
+              alert('Claim succeeded but failed to load SQ list: ' + (listResult ? listResult.message : 'Unknown error'));
+              document.getElementById('claimBtn').disabled = false;
+              document.getElementById('resumeBtn').disabled = false;
+              return;
+            }
+
+            console.log('✅ [AUTO-START DEBUG] getSQList success - sqNumbers:', listResult.sqNumbers);
+            console.log('✅ [AUTO-START DEBUG] getSQList returned sqRowRanges:', listResult.sqRowRanges);
+            console.log('🔍 [AUTO-START DEBUG] Calling initializeBatchFromSQList()...');
+
+            // Step 2: Initialize batch and load first SQ only
+            initializeBatchFromSQList(listResult.sqNumbers, listResult.sqRowRanges);
+          })
+          .withFailureHandler(function(error) {
+            console.error('❌ [AUTO-START DEBUG] getSQList error:', error);
+            hideLoading();
+            alert('Claim succeeded but failed to load data: ' + error.message);
+            document.getElementById('claimBtn').disabled = false;
+            document.getElementById('resumeBtn').disabled = false;
+          })
+          .getSQList(BOT_ID);
+        return;
+      } else {
+        console.warn('⚠️ [AUTO-START DEBUG] result.useResume is NOT true - auto-start will not happen');
+        console.log('🔍 [AUTO-START DEBUG] This means the result does not have useResume flag set');
+      }
+
+      // All paths now use paginated loading via initializeBatchFromSQList()
+    }
+
+    function displayCurrentSQ() {
+      if (!currentSQData) {
+        console.error('No current SQ data to display');
+        return;
+      }
 
       // Update progress badge
       document.getElementById('progressBadge').textContent = `SQ ${currentSQIndex + 1} of ${totalSQsInBatch}`;
 
       // Update SQ info
-      document.getElementById('currentSQNumber').textContent = currentSQ.sqNumber;
-      document.getElementById('currentSQRowCount').textContent = currentSQ.rowCount;
+      document.getElementById('currentSQNumber').textContent = currentSQData.sqNumber;
+      document.getElementById('currentSQRowCount').textContent = currentSQData.rowCount;
 
       // Display first row as preview
-      const firstRow = currentSQ.rows[0];
+      const firstRow = currentSQData.rows[0];
       document.getElementById('game').textContent = firstRow.game || '-';
       document.getElementById('cardName').textContent = firstRow.cardName || '-';
       document.getElementById('setName').textContent = firstRow.setName || '-';
       document.getElementById('condition').textContent = firstRow.condition || '-';
 
       // Auto-open SQ link
-      if (currentSQ.sqLink) {
-        window.open(currentSQ.sqLink, '_blank');
+      if (currentSQData.sqLink) {
+        window.open(currentSQData.sqLink, '_blank');
       }
 
       // Reset upload status
       document.getElementById('uploadStatus').style.display = 'none';
       document.getElementById('manualDataCard').style.display = 'none';
 
-      // Check if this SQ has missing fields
+      // Check if this SQ has missing order/buyer data
+      // If so, disable "Next SQ" button until PDF is uploaded or manual data is entered
       checkMissingFields();
     }
 
-    function checkMissingFields() {
-      const currentSQ = batchedSQs[currentSQIndex];
+    function checkMissingFields(showForm) {
+      if (!currentSQData) return;
+
       let hasMissing = false;
 
-      for (const row of currentSQ.rows) {
+      for (const row of currentSQData.rows) {
         if (!row.orderNumber || !row.buyerName) {
           hasMissing = true;
           break;
@@ -376,21 +662,24 @@
       }
 
       if (hasMissing) {
-        // Show manual data form
-        showManualDataForm();
+        // Only show manual data form if showForm parameter is true
+        // This allows us to check/disable button without showing form on initial load
+        if (showForm === true) {
+          showManualDataForm();
+        }
         document.getElementById('nextSqBtn').disabled = true;
-        document.getElementById('nextSqHint').textContent = 'Complete all required fields to proceed';
+        document.getElementById('nextSqHint').textContent = 'Upload PDF or enter data manually to proceed';
       } else {
-        // No missing fields, enable next button
+        // No missing fields, enable next button and hide manual form
         document.getElementById('nextSqBtn').disabled = false;
         document.getElementById('nextSqHint').textContent = 'Ready to move to next SQ';
+        document.getElementById('manualDataCard').style.display = 'none';
       }
     }
 
     function openCurrentSqLink() {
-      const currentSQ = batchedSQs[currentSQIndex];
-      if (currentSQ && currentSQ.sqLink) {
-        window.open(currentSQ.sqLink, '_blank');
+      if (currentSQData && currentSQData.sqLink) {
+        window.open(currentSQData.sqLink, '_blank');
       } else {
         alert('No SQ link available');
       }
@@ -419,12 +708,17 @@
       const reader = new FileReader();
       reader.onload = function(e) {
         const base64Data = e.target.result.split(',')[1];
-        const currentSQ = batchedSQs[currentSQIndex];
+
+        if (!currentSQData) {
+          uploadStatus.className = 'alert alert-danger';
+          uploadStatus.textContent = 'No SQ data loaded';
+          return;
+        }
 
         google.script.run
           .withSuccessHandler(handlePDFUploadSuccess)
           .withFailureHandler(handlePDFUploadError)
-          .processPDFUpload(BOT_ID, currentSQ.sqNumber, base64Data, file.name);
+          .processPDFUpload(BOT_ID, currentSQData.sqNumber, base64Data, file.name);
       };
       reader.readAsDataURL(file);
     }
@@ -442,16 +736,40 @@
       uploadStatus.className = 'alert alert-success';
       uploadStatus.innerHTML = '<i class="bi bi-check-circle me-2"></i>' + result.message;
 
-      // Update current SQ's rows with data from PDF
-      if (result.updatedItems && result.updatedItems.length > 0) {
-        batchedSQs[currentSQIndex].rows = result.updatedItems;
-        saveState();
+      // Reload SQ data from Helper Doc to get fresh data with order/buyer info
+      console.log('PDF processed successfully, reloading SQ data from Helper Doc...');
 
-        console.log('Updated current SQ after PDF:', batchedSQs[currentSQIndex]);
+      showLoading('Refreshing SQ data...');
 
-        // Check if we still have missing fields
-        checkMissingFields();
-      }
+      google.script.run
+        .withSuccessHandler(function(reloadResult) {
+          hideLoading();
+
+          if (!reloadResult || !reloadResult.success) {
+            console.error('Failed to reload SQ data:', reloadResult);
+            uploadStatus.className = 'alert alert-warning';
+            uploadStatus.innerHTML = '<i class="bi bi-exclamation-triangle me-2"></i>' +
+              'PDF processed but failed to refresh data. Please click "Next SQ" and come back.';
+            return;
+          }
+
+          // Update current SQ data with fresh data from Helper Doc
+          currentSQData = reloadResult.sqData;
+          saveState();
+
+          console.log('Reloaded SQ data after PDF upload:', currentSQData);
+
+          // Check if we still have missing fields, and show manual form if needed
+          checkMissingFields(true);  // Pass true to show form after PDF upload
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          console.error('Error reloading SQ data:', error);
+          uploadStatus.className = 'alert alert-warning';
+          uploadStatus.innerHTML = '<i class="bi bi-exclamation-triangle me-2"></i>' +
+            'PDF processed but failed to refresh: ' + error.message;
+        })
+        .loadSingleSQ(BOT_ID, result.sqNumber);
     }
 
     function handlePDFUploadError(error) {
@@ -466,13 +784,24 @@
       const container = document.getElementById('manualFields');
       container.innerHTML = '';
 
-      const currentSQ = batchedSQs[currentSQIndex];
+      if (!currentSQData) return;
 
-      currentSQ.rows.forEach((row, idx) => {
+      console.log('🔍 [MANUAL FORM DEBUG] showManualDataForm called with ' + currentSQData.rows.length + ' total rows');
+      let displayedCount = 0;
+
+      currentSQData.rows.forEach((row, idx) => {
         const needsOrder = !row.orderNumber;
         const needsBuyer = !row.buyerName;
 
-        if (!needsOrder && !needsBuyer) return; // Skip complete rows
+        console.log('  Row ' + (idx + 1) + ': ' + row.cardName + ' - Order: "' + (row.orderNumber || 'MISSING') + '", Buyer: "' + (row.buyerName || 'MISSING') + '"');
+
+        if (!needsOrder && !needsBuyer) {
+          console.log('    → Skipping (complete)');
+          return; // Skip complete rows
+        }
+
+        console.log('    → Displaying in form (needsOrder=' + needsOrder + ', needsBuyer=' + needsBuyer + ')');
+        displayedCount++;
 
         const rowDiv = document.createElement('div');
         rowDiv.className = 'card mb-2';
@@ -501,7 +830,14 @@
         container.appendChild(rowDiv);
       });
 
-      document.getElementById('manualDataCard').style.display = 'block';
+      console.log('🔍 [MANUAL FORM DEBUG] Displayed ' + displayedCount + ' row(s) with missing data in form');
+
+      if (displayedCount > 0) {
+        document.getElementById('manualDataCard').style.display = 'block';
+      } else {
+        console.log('🔍 [MANUAL FORM DEBUG] No missing rows, hiding manual form card');
+        document.getElementById('manualDataCard').style.display = 'none';
+      }
     }
 
     function syncManualData() {
@@ -519,12 +855,19 @@
         } else {
           input.classList.remove('is-invalid');
           // Update the row data in memory
-          batchedSQs[currentSQIndex].rows[rowIdx][field] = value;
+          if (currentSQData) {
+            currentSQData.rows[rowIdx][field] = value;
+          }
         }
       });
 
       if (!allFilled) {
         alert('Please fill in all missing fields');
+        return;
+      }
+
+      if (!currentSQData) {
+        alert('No SQ data loaded');
         return;
       }
 
@@ -534,7 +877,7 @@
       google.script.run
         .withSuccessHandler(handleManualSyncSuccess)
         .withFailureHandler(handleError)
-        .syncAllItemsToHelper(BOT_ID, batchedSQs[currentSQIndex].rows);
+        .syncAllItemsToHelper(BOT_ID, currentSQData.rows);
     }
 
     function handleManualSyncSuccess(result) {
@@ -560,6 +903,7 @@
     function nextSQ() {
       // Move to next SQ
       currentSQIndex++;
+      currentSQData = null; // Clear current data
       saveState();
 
       if (currentSQIndex >= totalSQsInBatch) {
@@ -568,32 +912,39 @@
         document.getElementById('uploadBatchCard').style.display = 'block';
         updateUploadSummary();
       } else {
-        // Display next SQ
-        displayCurrentSQ();
+        // Load next SQ on-demand (using row ranges from sqRowRanges map)
+        loadSingleSQAndDisplay(currentSQIndex);
       }
     }
 
     function updateUploadSummary() {
-      let totalRows = 0;
-      for (const sq of batchedSQs) {
-        totalRows += sq.rowCount;
-      }
-
-      document.getElementById('totalRowsToUpload').textContent = totalRows;
+      // We don't have full data for all SQs, but we know the count
+      // The upload will read directly from Helper Doc anyway
       document.getElementById('totalSQsToUpload').textContent = totalSQsInBatch;
+      document.getElementById('totalRowsToUpload').textContent = '(counting...)';
+
+      // Get total row count from Helper Doc
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result && result.success) {
+            document.getElementById('totalRowsToUpload').textContent = result.totalRows || 'unknown';
+          }
+        })
+        .withFailureHandler(function(error) {
+          console.error('Failed to get row count:', error);
+        })
+        .getSQList(BOT_ID);
     }
 
     function uploadBatchToRefundLog() {
       showLoading('Uploading all SQs to Refund Log...');
       document.getElementById('uploadBtn').disabled = true;
 
-      // Extract SQ numbers
-      const sqNumbers = batchedSQs.map(sq => sq.sqNumber);
-
+      // Use sqNumbersList (already have all SQ numbers)
       google.script.run
         .withSuccessHandler(handleUploadSuccess)
         .withFailureHandler(handleError)
-        .uploadBatchToRefundLog(BOT_ID, sqNumbers);
+        .uploadBatchToRefundLog(BOT_ID, sqNumbersList);
     }
 
     function handleUploadSuccess(result) {
@@ -605,7 +956,7 @@
         return;
       }
 
-      const message = `Successfully uploaded ${result.rows} row(s) from ${result.sqCount} SQ(s) to Refund Log!`;
+      const message = `Successfully uploaded ${result.rows} row(s) from ${result.sqCount} SQ(s) to Refund Log!\n\nReady to claim next batch of 20 SQs.`;
       alert(message);
 
       // Clear state and reset for new batch
@@ -614,7 +965,8 @@
 
     function startNewBatch() {
       // Clear state
-      batchedSQs = [];
+      sqNumbersList = [];
+      currentSQData = null;
       currentSQIndex = 0;
       totalSQsInBatch = 0;
       clearState();
@@ -624,7 +976,31 @@
       document.getElementById('processSQCard').style.display = 'none';
       document.getElementById('uploadBatchCard').style.display = 'none';
       document.getElementById('claimBtn').disabled = false;
+      document.getElementById('resumeBtn').disabled = false;
       document.getElementById('uploadBtn').disabled = false;
+    }
+
+    function showLocalStorageInfo() {
+      const savedSQList = localStorage.getItem('sqNumbersList');
+      const savedIndex = localStorage.getItem('currentSQIndex');
+
+      if (savedSQList && savedIndex) {
+        const savedSQs = JSON.parse(savedSQList);
+        const index = parseInt(savedIndex);
+        alert(`Saved Progress:\n\nCurrent SQ: ${index + 1} of ${savedSQs.length}\n\nSQ List:\n${savedSQs.slice(0, 5).join('\n')}${savedSQs.length > 5 ? '\n...' : ''}`);
+      } else {
+        alert('No saved progress found in localStorage');
+      }
+    }
+
+    function clearCacheAndRestart() {
+      if (confirm('This will clear all batch progress and start fresh. Are you sure?')) {
+        // Clear localStorage
+        clearState();
+
+        // Reload the page to start completely fresh
+        window.location.reload();
+      }
     }
 
     function handleError(error) {
@@ -635,7 +1011,7 @@
 
     // Warn user if they try to leave with batch in progress
     window.addEventListener('beforeunload', function(e) {
-      if (batchedSQs.length > 0 && currentSQIndex < totalSQsInBatch) {
+      if (sqNumbersList.length > 0 && currentSQIndex < totalSQsInBatch) {
         e.preventDefault();
         e.returnValue = 'You have a batch in progress. Are you sure you want to leave?';
         return e.returnValue;
