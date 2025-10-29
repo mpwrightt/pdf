@@ -196,6 +196,62 @@ class handler(BaseHTTPRequestHandler):
             cleaned_lines.append(l)
         order_text = '\n'.join(cleaned_lines)
         
+        # Pattern 0: Slot O/X multi-line format (card name first, then qty+game+set on next line)
+        # Format: "CardName - #Collector - Rarity - Condition [partial]"
+        #   Next: "Quantity Game - Set Name"
+        #   Optional: "Edition" or other condition continuation
+        # Example: "Tri-Brigade Hammer - #DOOD-EN068 - Super Rare - Near Mint 1st"
+        #          "1 YuGiOh - Doom of Dimensions"
+        #          "Edition"
+        slot_card_pattern = r'^(.+?)\s+-\s+#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
+        qty_game_set_pattern = r'^(\d+)\s+([A-Za-z\-\']+)\s+-\s+(.+)$'
+        
+        i = 0
+        while i < len(cleaned_lines):
+            line = cleaned_lines[i].strip()
+            match_card = re.match(slot_card_pattern, line)
+            
+            if match_card and i + 1 < len(cleaned_lines):
+                next_line = cleaned_lines[i + 1].strip()
+                match_qty = re.match(qty_game_set_pattern, next_line)
+                
+                if match_qty:
+                    # Extract from both lines
+                    card_name = match_card.group(1).strip()
+                    collector_num = match_card.group(2).strip()
+                    rarity = match_card.group(3).strip()
+                    condition = match_card.group(4).strip()
+                    
+                    quantity = int(match_qty.group(1))
+                    game = match_qty.group(2).strip()
+                    set_name = match_qty.group(3).strip()
+                    
+                    # Check if condition continues on third line (e.g., "Edition")
+                    if i + 2 < len(cleaned_lines):
+                        third_line = cleaned_lines[i + 2].strip()
+                        # If third line is a single word or short phrase (like "Edition", "Foil"), append to condition
+                        if third_line and len(third_line) < 30 and not re.match(r'^(.+?)\s+-\s+#', third_line):
+                            condition = f"{condition} {third_line}".strip()
+                            i += 1  # Skip this line in next iteration
+                    
+                    # Add card
+                    card_key = f"{card_name}|{collector_num}|{condition}"
+                    if card_key not in seen_cards:
+                        seen_cards.add(card_key)
+                        cards.append({
+                            'name': card_name,
+                            'quantity': quantity,
+                            'condition': condition,
+                            'setName': set_name,
+                            'collectorNumber': collector_num,
+                            'rarity': rarity
+                        })
+                    
+                    i += 2  # Skip both lines (card line + qty line)
+                    continue
+            
+            i += 1
+        
         # Pattern 1: With "Bin X" prefix - handles multiline set names
         # Updated to handle double-sided cards with '//' in collector number (e.g., "#18 // 20")
         pattern_bin = r'Bin\s+[\w\-]+\s+(\d+)\s+(.+?)\s+-\s#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
