@@ -55,10 +55,18 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             
+            # Aggregate debug info
+            total_debug = {'pattern_0b_attempts': 0, 'pattern_0b_matches': 0, 'pattern_0c_attempts': 0, 'pattern_0c_matches': 0}
+            for order in orders:
+                if 'debug' in order:
+                    for key in total_debug:
+                        total_debug[key] += order['debug'].get(key, 0)
+            
             response = {
                 'success': True,
                 'orders': orders,
-                'totalOrders': len(orders)
+                'totalOrders': len(orders),
+                'debug': total_debug
             }
             
             self.wfile.write(json.dumps(response).encode('utf-8'))
@@ -119,14 +127,15 @@ class handler(BaseHTTPRequestHandler):
                 buyer_name = self.extract_buyer_name(order_section, order_num)
                 
                 # Extract cards from this order
-                cards = self.extract_cards(order_section)
+                cards, debug_info = self.extract_cards(order_section)
                 
                 orders.append({
                     'orderNumber': order_num,
                     'buyerName': buyer_name,
                     'cards': cards,
                     'startPos': start_pos,
-                    'endPos': end_pos
+                    'endPos': end_pos,
+                    'debug': debug_info
                 })
         
         return orders
@@ -227,6 +236,8 @@ class handler(BaseHTTPRequestHandler):
         slot_card_collector_no_hash = r'^(.+)\s+-\s*$'
         
         i = 0
+        debug_info = {'pattern_0b_attempts': 0, 'pattern_0b_matches': 0, 'pattern_0c_attempts': 0, 'pattern_0c_matches': 0}
+        
         while i < len(cleaned_lines):
             line = cleaned_lines[i].strip()
             
@@ -234,6 +245,7 @@ class handler(BaseHTTPRequestHandler):
             # Must check before Pattern 0 to prevent false matches
             # Only match if line does NOT contain '#' (no collector on first line)
             if '#' not in line:
+                debug_info['pattern_0b_attempts'] += 1
                 match_0b = re.match(slot_card_no_collector, line)
                 if match_0b and i + 2 < len(cleaned_lines):
                     next_line = cleaned_lines[i + 1].strip()
@@ -243,6 +255,7 @@ class handler(BaseHTTPRequestHandler):
                     if next_line.isdigit():
                         match_collector = re.match(collector_rarity_cond, third_line)
                         if match_collector:
+                            debug_info['pattern_0b_matches'] += 1
                             card_name = match_0b.group(1).strip()
                             game = match_0b.group(2).strip()
                             set_name_part1 = match_0b.group(3).strip()
@@ -281,6 +294,7 @@ class handler(BaseHTTPRequestHandler):
                             continue
             
             # Try Pattern 0c SECOND (Squirtle case - ends with "-")
+            debug_info['pattern_0c_attempts'] += 1
             match_0c = re.match(slot_card_collector_no_hash, line)
             if match_0c and i + 2 < len(cleaned_lines):
                 next_line = cleaned_lines[i + 1].strip()
@@ -289,6 +303,7 @@ class handler(BaseHTTPRequestHandler):
                 match_collector = re.match(collector_rarity_cond, third_line)
                 
                 if match_qty and match_collector:
+                    debug_info['pattern_0c_matches'] += 1
                     card_name = match_0c.group(1).strip()
                     collector_num = match_collector.group(1).strip()
                     rarity = match_collector.group(2).strip()
@@ -1045,4 +1060,4 @@ class handler(BaseHTTPRequestHandler):
                     'rarity': match.group(4).strip()
                 })
         
-        return cards
+        return cards, debug_info
