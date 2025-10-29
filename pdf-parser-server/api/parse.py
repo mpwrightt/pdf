@@ -232,13 +232,15 @@ class handler(BaseHTTPRequestHandler):
             
             # Try Pattern 0b FIRST (most specific - Theoden case)
             # Must check before Pattern 0 to prevent false matches
-            match_0b = re.match(slot_card_no_collector, line)
-            if match_0b and i + 2 < len(cleaned_lines):
-                next_line = cleaned_lines[i + 1].strip()
-                third_line = cleaned_lines[i + 2].strip()
-                
-                # Check if next line is just a number and third line has #collector
-                if next_line.isdigit():
+            # Only match if line does NOT contain '#' (no collector on first line)
+            if '#' not in line:
+                match_0b = re.match(slot_card_no_collector, line)
+                if match_0b and i + 2 < len(cleaned_lines):
+                    next_line = cleaned_lines[i + 1].strip()
+                    third_line = cleaned_lines[i + 2].strip()
+                    
+                    # Check if next line is just a number and third line has #collector
+                    if next_line.isdigit():
                     match_collector = re.match(collector_rarity_cond, third_line)
                     if match_collector:
                         card_name = match_0b.group(1).strip()
