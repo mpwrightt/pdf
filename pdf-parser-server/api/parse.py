@@ -241,8 +241,8 @@ class handler(BaseHTTPRequestHandler):
                     
                     # Check if next line is just a number and third line has #collector
                     if next_line.isdigit():
-                    match_collector = re.match(collector_rarity_cond, third_line)
-                    if match_collector:
+                        match_collector = re.match(collector_rarity_cond, third_line)
+                        if match_collector:
                         card_name = match_0b.group(1).strip()
                         game = match_0b.group(2).strip()
                         set_name_part1 = match_0b.group(3).strip()
