@@ -243,42 +243,42 @@ class handler(BaseHTTPRequestHandler):
                     if next_line.isdigit():
                         match_collector = re.match(collector_rarity_cond, third_line)
                         if match_collector:
-                        card_name = match_0b.group(1).strip()
-                        game = match_0b.group(2).strip()
-                        set_name_part1 = match_0b.group(3).strip()
-                        
-                        quantity = int(next_line)
-                        collector_num = match_collector.group(1).strip()
-                        rarity = match_collector.group(2).strip()
-                        condition_and_set = match_collector.group(3).strip()
-                        
-                        # Parse condition and set continuation
-                        parts = condition_and_set.split(None, 2)
-                        if len(parts) >= 2:
-                            if len(parts) == 3 and ('of' in parts[2] or len(parts[2]) > 10):
-                                condition = f"{parts[0]} {parts[1]}".strip()
-                                set_name = f"{set_name_part1} {parts[2]}".strip()
+                            card_name = match_0b.group(1).strip()
+                            game = match_0b.group(2).strip()
+                            set_name_part1 = match_0b.group(3).strip()
+                            
+                            quantity = int(next_line)
+                            collector_num = match_collector.group(1).strip()
+                            rarity = match_collector.group(2).strip()
+                            condition_and_set = match_collector.group(3).strip()
+                            
+                            # Parse condition and set continuation
+                            parts = condition_and_set.split(None, 2)
+                            if len(parts) >= 2:
+                                if len(parts) == 3 and ('of' in parts[2] or len(parts[2]) > 10):
+                                    condition = f"{parts[0]} {parts[1]}".strip()
+                                    set_name = f"{set_name_part1} {parts[2]}".strip()
+                                else:
+                                    condition = condition_and_set
+                                    set_name = set_name_part1
                             else:
                                 condition = condition_and_set
                                 set_name = set_name_part1
-                        else:
-                            condition = condition_and_set
-                            set_name = set_name_part1
-                        
-                        card_key = f"{card_name}|{collector_num}|{condition}"
-                        if card_key not in seen_cards:
-                            seen_cards.add(card_key)
-                            cards.append({
-                                'name': card_name,
-                                'quantity': quantity,
-                                'condition': condition,
-                                'setName': set_name,
-                                'collectorNumber': collector_num,
-                                'rarity': rarity
-                            })
-                        
-                        i += 3
-                        continue
+                            
+                            card_key = f"{card_name}|{collector_num}|{condition}"
+                            if card_key not in seen_cards:
+                                seen_cards.add(card_key)
+                                cards.append({
+                                    'name': card_name,
+                                    'quantity': quantity,
+                                    'condition': condition,
+                                    'setName': set_name,
+                                    'collectorNumber': collector_num,
+                                    'rarity': rarity
+                                })
+                            
+                            i += 3
+                            continue
             
             # Try Pattern 0c SECOND (Squirtle case - ends with "-")
             match_0c = re.match(slot_card_collector_no_hash, line)
