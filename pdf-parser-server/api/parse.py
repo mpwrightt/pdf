@@ -227,11 +227,11 @@ class handler(BaseHTTPRequestHandler):
         slot_card_pattern = r'^(.+?)\s+-\s+#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s+(.+?)$'
         qty_game_set_pattern = r'^(\d+)\s+([A-Za-z\-\']+)\s+-\s+(.+)$'
         
-        # Pattern 0a: Card with collector but NO condition on first line (ends with "- M -")
-        # Format: "CardName - #Collector - Rarity -"
+        # Pattern 0a: Card with collector but NO complete condition on first line
+        # Format: "CardName - #Collector - Rarity -" OR "CardName - #Collector - Rarity - PartialCondition"
         #   Next: "Quantity Game - Set Name"
-        #   Third: "Condition"
-        slot_card_no_cond = r'^(.+?)\s+-\s+#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s*$'
+        #   Third: "Condition" or "Condition continuation"
+        slot_card_no_cond = r'^(.+?)\s+-\s+#([A-Za-z0-9/\-\s]+?)\s+-\s+([A-Za-z ]+)\s+-\s*(.*)$'
         
         # Pattern 0b: Card with NO collector on first line (Theoden case)
         # Format: "CardName - Game - Set Name (partial)"
@@ -396,7 +396,7 @@ class handler(BaseHTTPRequestHandler):
                     i += 2
                     continue
             
-            # Try Pattern 0a: No condition on first line (Lightning case)
+            # Try Pattern 0a: No complete condition on first line (Lightning case)
             match_0a = re.match(slot_card_no_cond, line)
             if match_0a and i + 2 < len(cleaned_lines):
                 next_line = cleaned_lines[i + 1].strip()
@@ -407,7 +407,13 @@ class handler(BaseHTTPRequestHandler):
                     card_name = match_0a.group(1).strip()
                     collector_num = match_0a.group(2).strip()
                     rarity = match_0a.group(3).strip()
-                    condition = third_line  # Condition on third line
+                    
+                    # Combine partial condition from line 1 with condition from line 3
+                    condition_part1 = match_0a.group(4).strip() if len(match_0a.groups()) >= 4 else ""
+                    if condition_part1:
+                        condition = f"{condition_part1} {third_line}".strip()
+                    else:
+                        condition = third_line
                     
                     quantity = int(match_qty.group(1))
                     game = match_qty.group(2).strip()
